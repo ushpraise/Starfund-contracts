@@ -48,4 +48,11 @@ Codes raised by cross-contract callback entrypoints (`register_callback`, `execu
 
 Codes 36–41 (SEP-41 transfer-wrapper guards, also raised by `withdraw` and
 `claim_investor_payout`) are documented in
-[`docs/escrow-token-safety.md`](escrow-token-safety.md).
+[`docs/escrow-token-safety.md`](escrow-token-safety.md).
+
+## Unfund Errors
+
+| Error Name | Code | Description |
+|---|---|---|
+| `UnfundAmountNotPositive` | 250 | `unfund` called with an amount less than or equal to zero. |
+| `OverWithdrawal` | 221 | `unfund` called with an amount greater than the investor's recorded contribution. |

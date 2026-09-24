@@ -729,7 +729,7 @@ Returns `true` when the investor has exercised `claim_investor_payout` after set
 
 ### `is_investor_refunded(investor: Address) → bool`
 
-**Storage key:** `DataKey::InvestorRefunded(investor)`  
+**Storage key:** `DataKey::InvestorRefunded(investor)` (persistent)
 **Signature:** `pub fn is_investor_refunded(env: Env, investor: Address) -> bool`
 
 Returns `true` when an investor's principal has been returned via `refund` in a cancelled (status 4) escrow.

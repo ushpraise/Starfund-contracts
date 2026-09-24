@@ -3205,6 +3205,15 @@ fn test_refund_zeroes_contribution() {
     client.refund(&investor);
 
     assert_eq!(client.get_contribution(&investor), 0);
+    env.as_contract(&client.address, || {
+        assert_eq!(
+            env.storage()
+                .persistent()
+                .get(&DataKey::InvestorRefunded(investor.clone())),
+            Some(true)
+        );
+        assert!(!env.storage().instance().has(&DataKey::InvestorRefunded(investor)));
+    });
 }
 
 #[test]
@@ -7289,6 +7298,14 @@ fn test_unfund_over_withdrawal() {
 
     client.fund(&investor, &1_000i128);
 
+    assert_contract_error(
+        client.try_unfund(&investor, &0i128),
+        EscrowError::UnfundAmountNotPositive,
+    );
+    assert_contract_error(
+        client.try_unfund(&investor, &(-1i128)),
+        EscrowError::UnfundAmountNotPositive,
+    );
     assert_contract_error(
         client.try_unfund(&investor, &1_001i128),
         EscrowError::OverWithdrawal,
