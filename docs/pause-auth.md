@@ -8,7 +8,7 @@
 
 ## Overview
 
-The **operational pause** is a lightweight incident-response circuit breaker controlled exclusively by the escrow's current `admin`. It is a single-call toggle (no clear delay, no multi-phase handshake) designed for rapid response to events such as a suspected token bug, oracle feed anomaly, or operational incident.
+The **operational pause** is a lightweight incident-response circuit breaker controlled exclusively by the escrow's current `admin`. `set_paused` accepts an `active` flag, a `PauseScope`, and a `PauseReason`; it writes a typed `PauseState` while preserving the legacy `DataKey::Paused` boolean for compatibility.
 
 The pause is **orthogonal** to the compliance/legal hold: each flag blocks its gated entrypoints independently, and toggling one never reads or writes the other's storage key.
 
@@ -31,19 +31,18 @@ The pause is **orthogonal** to the compliance/legal hold: each flag blocks its g
 
 ## 2. Auth Implementation
 
-### 2.1 `set_paused(env, active: bool)`
+### 2.1 `set_paused(env, active: bool, scope: PauseScope, reason: PauseReason)`
 
-```text
-escrow/src/lib.rs line ~3096
-```
+See [`StarfundEscrow::set_paused`](../escrow/src/lib.rs) and the [`PauseScope`](../escrow/src/lib.rs), [`PauseReason`](../escrow/src/lib.rs), and [`PauseState`](../escrow/src/lib.rs) definitions in the contract source.
 
 | Step | Detail |
 |---|---|
 | 1. Load escrow + auth | `let escrow = Self::load_escrow_require_admin(&env);` |
-| 2. Storage write | `env.storage().instance().set(&DataKey::Paused, &active);` |
-| 3. Emit event | `PausedChanged { name: "paused", invoice_id, active: 0\|1 }` |
+| 2. Read and enforce limits | Reads `PauseToggleLimit`; a configured rolling window applies to every toggle. |
+| 3. Storage write | Writes `PauseState`, `DataKey::Paused`, and `DataKey::PausedAt` atomically when activating; clearing removes the active state and timestamp. |
+| 4. Emit event | Emits `PausedChanged` with the typed scope and reason. |
 
-`load_escrow_require_admin` (line ~2285) does:
+`load_escrow_require_admin` in [`escrow/src/lib.rs`](../escrow/src/lib.rs) does:
 
 ```rust
 fn load_escrow_require_admin(env: &Env) -> InvoiceEscrow {
@@ -61,9 +60,7 @@ If the caller is not the current `escrow.admin`, `require_auth()` panics the hos
 
 ### 2.2 `paused_active(env) -> bool` (internal)
 
-```text
-escrow/src/lib.rs line ~1643
-```
+See the private `paused_active` helper in [`escrow/src/lib.rs`](../escrow/src/lib.rs).
 
 ```rust
 fn paused_active(env: &Env) -> bool {
@@ -76,9 +73,7 @@ fn paused_active(env: &Env) -> bool {
 
 ### 2.3 `is_paused(env) -> bool` (public read-only view)
 
-```text
-escrow/src/lib.rs line ~2361
-```
+See [`StarfundEscrow::is_paused`](../escrow/src/lib.rs). It is a public read-only view and requires no authorization.
 
 ```rust
 pub fn is_paused(env: Env) -> bool {
@@ -241,7 +236,7 @@ pub struct PausedChanged {
 }
 ```
 
-Emitted by **every** `set_paused` call, including no-op calls (`set_paused(true)` when already true).
+Emitted by **every** `set_paused` call, including repeated activation calls. The event includes the typed `scope` and `reason` fields.
 
 Topics for indexer filtering:
 - **Topic 1:** `"paused"` (Symbol)
@@ -253,25 +248,25 @@ See also: [`docs/escrow-events.md` § `PausedChanged`](escrow-events.md#pausedch
 
 ## 6. No-Op Behavior
 
-`set_paused` intentionally does **not** guard against redundant calls. Calling `set_paused(true)` when pause is already active succeeds silently (still emits `PausedChanged`). Same for `set_paused(false)` when already cleared.
+`set_paused` intentionally does **not** reject redundant activation or clearing, but every call still consumes a rate-limit slot when a limit is configured. Clearing a scoped pause requires a matching scope, or `PauseScope::All` as an override.
 
 | Call | Current state | Result |
 |---|---|---|
-| `set_paused(true)` | `paused = false` | `paused ← true`, event emitted (`active: 1`) |
-| `set_paused(true)` | `paused = true` | no state change, event emitted (`active: 1`) |
-| `set_paused(false)` | `paused = true` | `paused ← false`, event emitted (`active: 0`) |
-| `set_paused(false)` | `paused = false` | no state change, event emitted (`active: 0`) |
+| `set_paused(true, scope, reason)` | `paused = false` | stores typed state and emits an active event |
+| `set_paused(true, scope, reason)` | `paused = true` | refreshes active metadata and emits an active event |
+| `set_paused(false, matching_scope, reason)` | `paused = true` | clears the pause and emits an inactive event |
+| `set_paused(false, mismatched_scope, reason)` | `paused = true` | panics with `PauseScopeMismatch`; state remains active |
 | `set_paused(_)` | escrow not initialized | panics with `EscrowNotInitialized` (20) |
 
 ---
 
 ## 7. Storage Key
 
-- **Key:** `DataKey::Paused`
-- **Type:** `bool`
+- **Keys:** `DataKey::Paused`, `DataKey::PauseState`, `DataKey::PausedAt`, `DataKey::PauseMaxDurationSecs`, and pause rate-limit keys
+- **Types:** legacy `bool`, typed `PauseState`, and duration/rate-limit configuration values
 - **Storage class:** Instance
 - **Default when absent:** `false` (not paused)
-- **Read pattern:** `env.storage().instance().get(&DataKey::Paused).unwrap_or(false)`
+- **Read pattern:** `paused_active` reads the legacy flag, applies `PauseMaxDurationSecs` against `PausedAt`, and `paused_blocks` applies the stored scope.
 
 ---
 
@@ -279,8 +274,8 @@ See also: [`docs/escrow-events.md` § `PausedChanged`](escrow-events.md#pausedch
 
 | Property | Operational pause | Legal hold |
 |---|---|---|
-| Storage key | `DataKey::Paused` | `DataKey::LegalHold` |
-| Setter | `set_paused(active)` | `set_legal_hold(active)` / `clear_legal_hold()` |
+| Storage key | `DataKey::Paused` plus typed pause keys | `DataKey::LegalHold` |
+| Setter | `set_paused(active, scope, reason)` | `set_legal_hold(active)` / `clear_legal_hold()` |
 | Clear delay | None (single-call) | Optional two-phase (`request_clear_legal_hold` → `clear_legal_hold`) |
 | Event | `PausedChanged` | `LegalHoldChanged` |
 | Compliance semantics | None — operational only | Yes — compliance/regulatory |
@@ -296,11 +291,11 @@ When both flags are simultaneously active, the pause gate fires first in the can
 
 1. **Admin custody:** A compromised or lost admin key can pause the escrow indefinitely. Production deployments **must** use a governed admin (multisig or DAO) so the pause cannot strand funds. See `docs/escrow-security-checklist.md` §5.10.
 
-2. **No expiry:** The pause has no programmatic expiry. It remains active until the current (or rotated-in) admin calls `set_paused(false)`.
+2. **Expiry and rate limits:** `PauseMaxDurationSecs` can make an active pause effective only until its deadline, while `PauseToggleLimit` limits calls in a rolling window. Both are admin-configured and default to unlimited.
 
 3. **Read-only gate:** The pause check is a read-only storage read — it does not change state and does not depend on timestamps or external oracles. A failed pause gate leaves the contract completely untouched (no partial writes).
 
-4. **No-pause bypass:** There is no entrypoint to bypass the pause — not even for the admin. The only way to make a paused entrypoint callable again is `set_paused(false)`.
+4. **Scoped bypass:** A pause scope intentionally leaves unrelated operation families available. The matching scope or `PauseScope::All` is required to clear the pause.
 
 5. **Pause during legal hold:** Pausing while a legal hold is active adds an extra layer of blocking. Even if the legal hold is cleared, the pause must also be cleared before the gated entrypoints become callable.
 
@@ -327,7 +322,7 @@ Full test coverage in `escrow/src/tests/pause.rs`:
 
 ## 11. Cross-References
 
-- **Implementation:** `escrow/src/lib.rs` — `set_paused` (~line 3096), `paused_active` (~line 1643), `is_paused` (~line 2361)
+- **Implementation:** [`escrow/src/lib.rs`](../escrow/src/lib.rs) — `set_paused`, `paused_active`, `paused_blocks`, and `is_paused`
 - **Tests:** `escrow/src/tests/pause.rs`
 - **Events:** `docs/escrow-events.md` § `PausedChanged`
 - **Security checklist:** `docs/escrow-security-checklist.md` §5.10, §6
