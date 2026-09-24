@@ -315,7 +315,7 @@ fn test_propose_admin_sets_pending_without_changing_admin() {
         &None::<i64>,
         &None::<u32>,
     );
-    let pending = client.propose_admin(&new_admin, &0u32);
+    let pending = client.propose_admin(&new_admin, &0u32, &None);
     assert_eq!(pending, new_admin);
     assert_eq!(client.get_pending_admin(), Some(new_admin));
     assert_eq!(client.get_escrow().admin, admin);
@@ -348,7 +348,7 @@ fn test_accept_admin_promotes_pending_and_clears_pending() {
         &None::<u32>,
     );
 
-    client.propose_admin(&new_admin, &0u32);
+    client.propose_admin(&new_admin, &0u32, &None);
     let updated = client.accept_admin();
     assert_eq!(updated.admin, new_admin);
     assert_eq!(client.get_escrow().admin, new_admin);
@@ -467,7 +467,7 @@ fn test_propose_admin_does_not_emit_deprecation_event() {
     let all_before = env.events().all();
     let events_before = all_before.events().len();
 
-    client.propose_admin(&new_admin, &0u32);
+    client.propose_admin(&new_admin, &0u32, &None);
 
     let all_events = env.events().all();
     let events = all_events.events();
@@ -618,7 +618,7 @@ fn test_transfer_admin_same_address_panics() {
         &None::<i64>,
         &None::<u32>,
     );
-    client.propose_admin(&admin, &0u32);
+    client.propose_admin(&admin, &0u32, &None);
 }
 
 #[test]
@@ -628,7 +628,7 @@ fn test_transfer_admin_uninitialized_panics() {
     env.mock_all_auths();
     let client = deploy(&env);
     let new_admin = Address::generate(&env);
-    client.propose_admin(&new_admin, &0u32);
+    client.propose_admin(&new_admin, &0u32, &None);
 }
 
 #[test]
@@ -648,7 +648,7 @@ fn test_accept_admin_requires_pending_admin_auth() {
     let (client, admin, sme) = setup(&env);
     let new_admin = Address::generate(&env);
     default_init(&client, &env, &admin, &sme);
-    client.propose_admin(&new_admin, &0u32);
+    client.propose_admin(&new_admin, &0u32, &None);
     env.mock_auths(&[]);
     client.accept_admin();
 }
@@ -661,8 +661,8 @@ fn test_propose_admin_overwrites_prior_pending() {
     let second = Address::generate(&env);
     default_init(&client, &env, &admin, &sme);
 
-    client.propose_admin(&first, &0u32);
-    client.propose_admin(&second, &1u32);
+    client.propose_admin(&first, &0u32, &None);
+    client.propose_admin(&second, &0u32, &None);
 
     assert_eq!(client.get_pending_admin(), Some(second.clone()));
     let updated = client.accept_admin();
@@ -676,10 +676,10 @@ fn test_propose_admin_rejects_unchanged_pending_admin() {
     let pending = Address::generate(&env);
     default_init(&client, &env, &admin, &sme);
 
-    client.propose_admin(&pending, &None);
+    client.propose_admin(&pending, &0u32, &None);
 
     assert_contract_error(
-        client.try_propose_admin(&pending, &None),
+        client.try_propose_admin(&pending, &0u32, &None),
         EscrowError::PendingAdminUnchanged,
     );
 }
@@ -695,8 +695,8 @@ fn test_propose_admin_supersede_emits_distinct_event() {
     let second = Address::generate(&env);
     default_init(&client, &env, &admin, &sme);
 
-    client.propose_admin(&first, &None);
-    client.propose_admin(&second, &None);
+    client.propose_admin(&first, &0u32, &None);
+    client.propose_admin(&second, &0u32, &None);
 
     // Snapshot events immediately: `env.events().all()` only retains the most
     // recent invocation's events, so any intervening read (e.g. get_escrow)
@@ -737,7 +737,7 @@ fn test_propose_admin_emits_event() {
     let new_admin = Address::generate(&env);
     default_init(&client, &env, &admin, &sme);
 
-    client.propose_admin(&new_admin, &0u32);
+    client.propose_admin(&new_admin, &0u32, &None);
 
     let all_events = env.events().all();
     assert_eq!(
@@ -763,7 +763,7 @@ fn test_propose_admin_emits_only_admin_proposed_event() {
     let new_admin = Address::generate(&env);
     default_init(&client, &env, &admin, &sme);
 
-    client.propose_admin(&new_admin, &None);
+    client.propose_admin(&new_admin, &0u32, &None);
 
     let events = env.events().all();
     assert_eq!(
@@ -844,7 +844,7 @@ fn test_propose_admin_requires_current_admin_auth() {
     default_init(&client, &env, &admin, &sme);
     env.mock_auths(&[]);
     let new_admin = Address::generate(&env);
-    client.propose_admin(&new_admin, &0u32);
+    client.propose_admin(&new_admin, &0u32, &None);
 }
 
 /// Assert `propose_admin` rejects `NewAdminSameAsCurrent`
@@ -854,7 +854,7 @@ fn test_propose_admin_same_address_panics() {
     let env = Env::default();
     let (client, admin, sme) = setup(&env);
     default_init(&client, &env, &admin, &sme);
-    client.propose_admin(&admin, &0u32);
+    client.propose_admin(&admin, &0u32, &None);
 }
 
 /// Assert `accept_admin` by wrong address panics
@@ -866,7 +866,7 @@ fn test_accept_admin_by_wrong_address_panics() {
     let (client, admin, sme) = setup(&env);
     let new_admin = Address::generate(&env);
     default_init(&client, &env, &admin, &sme);
-    client.propose_admin(&new_admin, &0u32);
+    client.propose_admin(&new_admin, &0u32, &None);
     let wrong_admin = Address::generate(&env);
     env.mock_auths(&[soroban_sdk::testutils::MockAuth {
         address: &wrong_admin,
@@ -893,7 +893,7 @@ fn test_accept_admin_event_carries_prior_and_new_admin() {
     let contract_id = client.address.clone();
     default_init(&client, &env, &old_admin, &sme);
 
-    client.propose_admin(&new_admin, &None);
+    client.propose_admin(&new_admin, &0u32, &None);
     client.accept_admin();
 
     let events = env.events().all();
@@ -931,7 +931,7 @@ fn test_admin_handover_lifecycle() {
     default_init(&client, &env, &old_admin, &sme);
 
     // 1. Propose admin
-    let pending = client.propose_admin(&new_admin, &0u32);
+    let pending = client.propose_admin(&new_admin, &0u32, &None);
     assert_eq!(pending, new_admin.clone());
     assert_eq!(client.get_pending_admin(), Some(new_admin.clone()));
 
@@ -991,7 +991,7 @@ fn test_pending_admin_remaining_secs_reports_positive_window() {
     default_init(&client, &env, &admin, &sme);
 
     env.ledger().set_timestamp(1_000);
-    client.propose_admin(&new_admin, &Some(60));
+    client.propose_admin(&new_admin, &0u32, &Some(60));
 
     assert_eq!(client.get_pending_admin_expiry(), Some(1_060));
     assert_eq!(client.get_pending_admin_remaining_secs(), Some(60));
@@ -1008,7 +1008,7 @@ fn test_pending_admin_remaining_secs_zero_at_expiry_and_accept_still_succeeds() 
     default_init(&client, &env, &admin, &sme);
 
     env.ledger().set_timestamp(2_000);
-    client.propose_admin(&new_admin, &Some(30));
+    client.propose_admin(&new_admin, &0u32, &Some(30));
     env.ledger().set_timestamp(2_030);
 
     assert_eq!(client.get_pending_admin_remaining_secs(), Some(0));
@@ -1027,7 +1027,7 @@ fn test_pending_admin_remaining_secs_zero_after_expiry_and_accept_rejects() {
     default_init(&client, &env, &admin, &sme);
 
     env.ledger().set_timestamp(3_000);
-    client.propose_admin(&new_admin, &Some(15));
+    client.propose_admin(&new_admin, &0u32, &Some(15));
     env.ledger().set_timestamp(3_016);
 
     assert_eq!(client.get_pending_admin_remaining_secs(), Some(0));
@@ -1043,7 +1043,7 @@ fn test_pending_admin_remaining_secs_handles_saturating_far_future_expiry() {
     default_init(&client, &env, &admin, &sme);
 
     env.ledger().set_timestamp(u64::MAX - 5);
-    client.propose_admin(&new_admin, &Some(100));
+    client.propose_admin(&new_admin, &0u32, &Some(100));
 
     assert_eq!(client.get_pending_admin_expiry(), Some(u64::MAX));
     assert_eq!(client.get_pending_admin_remaining_secs(), Some(5));
@@ -2281,7 +2281,7 @@ fn auth_audit_propose_admin_requires_current_admin() {
     let (client, _, _, _, _) = auth_audit_init_funded(&env);
     let new_admin = Address::generate(&env);
     env.mock_auths(&[]);
-    client.propose_admin(&new_admin, &0u32);
+    client.propose_admin(&new_admin, &0u32, &None);
 }
 
 #[test]
@@ -2289,7 +2289,7 @@ fn auth_audit_propose_admin_requires_current_admin() {
 fn auth_audit_accept_admin_requires_pending_admin() {
     let env = Env::default();
     let (client, _, _, _, pending_admin) = auth_audit_init_funded(&env);
-    client.propose_admin(&pending_admin, &0u32);
+    client.propose_admin(&pending_admin, &0u32, &None);
     env.mock_auths(&[]);
     client.accept_admin();
 }
@@ -2943,7 +2943,7 @@ fn test_cancel_pending_admin_propose_then_cancel_clears_pending() {
     let new_admin = Address::generate(&env);
     default_init(&client, &env, &admin, &sme);
 
-    client.propose_admin(&new_admin, &None);
+    client.propose_admin(&new_admin, &0u32, &None);
     let cancelled = client.cancel_pending_admin();
 
     assert_eq!(cancelled, new_admin);
@@ -2961,7 +2961,7 @@ fn test_cancel_pending_admin_accept_after_cancel_fails() {
     let new_admin = Address::generate(&env);
     default_init(&client, &env, &admin, &sme);
 
-    client.propose_admin(&new_admin, &None);
+    client.propose_admin(&new_admin, &0u32, &None);
     client.cancel_pending_admin();
 
     assert_contract_error(client.try_accept_admin(), EscrowError::NoPendingAdmin);
@@ -2990,7 +2990,7 @@ fn test_cancel_pending_admin_non_admin_rejected() {
     let new_admin = Address::generate(&env);
     default_init(&client, &env, &admin, &sme);
 
-    client.propose_admin(&new_admin, &None);
+    client.propose_admin(&new_admin, &0u32, &None);
     env.mock_auths(&[]);
     client.cancel_pending_admin();
 }
@@ -3005,12 +3005,12 @@ fn test_cancel_pending_admin_cancel_then_repropose_succeeds() {
     default_init(&client, &env, &admin, &sme);
 
     // Propose first, then cancel
-    client.propose_admin(&first, &None);
+    client.propose_admin(&first, &0u32, &None);
     client.cancel_pending_admin();
     assert_eq!(client.get_pending_admin(), None);
 
     // Propose second, then accept
-    client.propose_admin(&second, &None);
+    client.propose_admin(&second, &0u32, &None);
     let updated = client.accept_admin();
     assert_eq!(updated.admin, second);
     assert_eq!(client.get_pending_admin(), None);
@@ -3037,7 +3037,7 @@ fn test_cancel_pending_admin_emits_event() {
     let new_admin = Address::generate(&env);
     default_init(&client, &env, &admin, &sme);
 
-    client.propose_admin(&new_admin, &None);
+    client.propose_admin(&new_admin, &0u32, &None);
     client.cancel_pending_admin();
 
     let all_events = env.events().all();
@@ -3595,7 +3595,7 @@ fn test_post_handover_admin_can_clear_hold_set_by_old_admin() {
     assert!(client.get_legal_hold());
 
     // 2. Old admin proposes new admin
-    client.propose_admin(&new_admin, &None);
+    client.propose_admin(&new_admin, &0u32, &None);
 
     // 3. New admin accepts admin handover
     client.accept_admin();
@@ -3829,7 +3829,7 @@ fn test_pending_admin_remaining_positive_before_expiry() {
     default_init(&client, &env, &admin, &sme);
     let new_admin = Address::generate(&env);
     let window = 3600u64;
-    client.propose_admin(&new_admin, &Some(window));
+    client.propose_admin(&new_admin, &0u32, &Some(window));
     assert_eq!(client.get_pending_admin_remaining_secs(), Some(window));
 }
 
@@ -3841,7 +3841,7 @@ fn test_pending_admin_remaining_zero_at_and_after_expiry() {
     default_init(&client, &env, &admin, &sme);
     let new_admin = Address::generate(&env);
     let window = 100u64;
-    client.propose_admin(&new_admin, &Some(window));
+    client.propose_admin(&new_admin, &0u32, &Some(window));
     let expiry = client.get_pending_admin_expiry().unwrap();
     env.ledger().set_timestamp(expiry);
     assert_eq!(client.get_pending_admin_remaining_secs(), Some(0));
@@ -3858,7 +3858,7 @@ fn test_pending_admin_remaining_consistent_with_accept_admin() {
     let (client, admin, sme) = setup(&env);
     default_init(&client, &env, &admin, &sme);
     let new_admin = Address::generate(&env);
-    client.propose_admin(&new_admin, &Some(10));
+    client.propose_admin(&new_admin, &0u32, &Some(10));
     let expiry = client.get_pending_admin_expiry().unwrap();
     env.ledger().set_timestamp(expiry + 1);
     assert_eq!(client.get_pending_admin_remaining_secs(), Some(0));

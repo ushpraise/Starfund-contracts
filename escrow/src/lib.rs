@@ -350,6 +350,12 @@ pub struct FeeSchedule {
 /// These are deliberately separate from [`DataKey`] so existing escrow storage is
 /// untouched. The active and pending keys are the source of truth for reads; the
 /// previous key is updated when a pending schedule activates.
+///
+/// This is currently a staged governance API: activating a schedule records the
+/// approved schedule for off-chain consumers but does not alter disbursements.
+/// [`StarfundEscrow::withdraw`] intentionally continues to use the immutable
+/// [`DataKey::ProtocolFeeBps`] configured at initialization until fee-schedule
+/// economics are enabled by a separate protocol decision.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum FeeScheduleStorageKey {
@@ -908,6 +914,8 @@ pub enum EscrowError {
     /// [`StarfundEscrow::update_yield_bps`] received a `new_yield_bps` equal to the current value.
     /// No-op updates are rejected to prevent spurious events and unnecessary storage writes.
     YieldBpsUnchanged = 229,
+    /// [`StarfundEscrow::set_paused`] received a scope that does not match the active pause.
+    PauseScopeMismatch = 248,
     /// [`StarfundEscrow::set_storage_limit`] received a non-positive limit.
     StorageLimitNotPositive = 232,
     /// [`StarfundEscrow::set_storage_limit`] received a limit outside allowed range.
@@ -1392,6 +1400,9 @@ pub enum DataKey {
     /// Number of [`StarfundEscrow::set_paused`] calls recorded within the current rate-limit
     /// window. Absent ⇒ `0`.
     PauseToggleCountInWindow,
+    /// Typed scope and reason for the active operational pause.
+    /// **Additive key (ADR-007):** absent on legacy instances and interpreted as a global pause.
+    PauseState,
     /// Admin-configured ceiling on storage entries processed per batch operation.
     /// **Additive key (ADR-007):** absent ⇒ [`DEFAULT_SETTLEMENT_LIMIT`]. Updatable via
     /// [`StarfundEscrow::set_storage_limit`].
@@ -6524,25 +6535,32 @@ impl StarfundEscrow {
             }
         }
 
-        let investor_effective_yield_bps: i64;
-        let tier_lock_secs: u64;
+        let resolution: YieldResolution;
         let mut claim_nb = 0u64;
 
         if simple_fund {
-            tier_lock_secs = 0;
-            if prev == 0 {
-                investor_effective_yield_bps = escrow.yield_bps;
+            resolution = if prev == 0 {
+                YieldResolution {
+                    effective_yield_bps: escrow.yield_bps,
+                    matched_lock_secs: 0,
+                }
             } else {
-                investor_effective_yield_bps =
-                    Self::get_persistent_investor_effective_yield(&env, investor.clone())
-                        .unwrap_or(escrow.yield_bps);
-            }
+                YieldResolution {
+                    effective_yield_bps: Self::get_persistent_investor_effective_yield(
+                        &env,
+                        investor.clone(),
+                    )
+                    .unwrap_or(escrow.yield_bps),
+                    matched_lock_secs: 0,
+                }
+            };
         } else {
             ensure(&env, prev == 0, EscrowError::TieredSecondDeposit);
-            let (eff, lock) =
-                Self::effective_yield_for_commitment(&env, escrow.yield_bps, committed_lock_secs);
-            investor_effective_yield_bps = eff;
-            tier_lock_secs = lock;
+            resolution = Self::effective_yield_for_commitment(
+                &env,
+                escrow.yield_bps,
+                committed_lock_secs,
+            );
             let now = env.ledger().timestamp();
             claim_nb = if committed_lock_secs == 0 {
                 0u64
@@ -6559,68 +6577,10 @@ impl StarfundEscrow {
             }
         }
 
-        escrow.funded_amount = escrow
-            .funded_amount
-            .checked_add(amount)
-            .unwrap_or_else(|| fail(&env, EscrowError::FundedAmountOverflow));
-
-        let mut next_status = escrow.status;
-        let mut snapshot_to_write = None;
-        if escrow.status == 0 && escrow.funded_amount >= escrow.funding_target {
-            next_status = 1;
-            if !env.storage().instance().has(&DataKey::FundingCloseSnapshot) {
-                snapshot_to_write = Some(FundingCloseSnapshot {
-                    total_principal: escrow.funded_amount,
-                    funding_target: escrow.funding_target,
-                    closed_at_ledger_timestamp: env.ledger().timestamp(),
-                    closed_at_ledger_sequence: env.ledger().sequence(),
-                });
-            }
-        }
-
-        // 2. require_auth checks
-        investor.require_auth();
-        escrow.payer.require_auth();
-
-        // 3. Storage writes
-        Self::set_persistent_investor_contribution(&env, investor.clone(), new_contribution);
-
-        if simple_fund {
-            if prev == 0 {
-                Self::set_persistent_investor_effective_yield(
-                    &env,
-                    investor.clone(),
-                    escrow.yield_bps,
-                );
-                Self::set_persistent_investor_claim_not_before(&env, investor.clone(), 0u64);
-                YieldResolution {
-                    effective_yield_bps: escrow.yield_bps,
-                    matched_lock_secs: 0,
-                }
-            } else {
-                // Returning investor: yield was set on first deposit; read it for the event.
-                // If prev > 0, preserve existing effective yield and claim lock.
-                // Read stored yield for the event (falls back to escrow default for new investors).
-                YieldResolution {
-                    effective_yield_bps: Self::get_persistent_investor_effective_yield(
-                        &env,
-                        investor.clone(),
-                    )
-                    .unwrap_or(escrow.yield_bps),
-                    matched_lock_secs: 0,
-                }
-            }
-        } else {
-            Self::set_persistent_investor_effective_yield(
-                &env,
-                investor.clone(),
-                investor_effective_yield_bps,
-            );
-            Self::set_persistent_investor_claim_not_before(&env, investor.clone(), claim_nb);
-            res
-        };
         let investor_effective_yield_bps = resolution.effective_yield_bps;
         let tier_lock_secs = resolution.matched_lock_secs;
+
+        escrow.payer.require_auth();
 
         escrow.funded_amount = escrow
             .funded_amount
@@ -6647,6 +6607,13 @@ impl StarfundEscrow {
         }
 
         Self::set_persistent_investor_contribution(&env, investor.clone(), new_contribution);
+
+        Self::set_persistent_investor_effective_yield(
+            &env,
+            investor.clone(),
+            investor_effective_yield_bps,
+        );
+        Self::set_persistent_investor_claim_not_before(&env, investor.clone(), claim_nb);
 
         if prev == 0 {
             env.storage().instance().set(
@@ -7856,7 +7823,12 @@ impl StarfundEscrow {
     /// # Errors
     /// Emits typed [`EscrowError`] codes when the escrow is uninitialized or `new_admin` is the
     /// current admin.
-    pub fn propose_admin(env: Env, new_admin: Address, expected_nonce: u32) -> Address {
+    pub fn propose_admin(
+        env: Env,
+        new_admin: Address,
+        expected_nonce: u32,
+        validity_window_secs: Option<u64>,
+    ) -> Address {
         let escrow = Self::load_escrow_require_admin(&env);
         Self::consume_admin_nonce(&env, expected_nonce);
 
@@ -7975,7 +7947,12 @@ impl StarfundEscrow {
     /// integrations to call `propose_admin` followed by `accept_admin`.
     #[deprecated(note = "use propose_admin followed by accept_admin")]
     pub fn transfer_admin(env: Env, new_admin: Address, expected_nonce: u32) -> InvoiceEscrow {
-        Self::propose_admin(env.clone(), new_admin.clone(), expected_nonce);
+        Self::propose_admin(
+            env.clone(),
+            new_admin.clone(),
+            expected_nonce,
+            None,
+        );
 
         // Re-read after the propose_admin delegation so the deprecation event
         // carries the exact `invoice_id` indexers will see in the prior
@@ -7986,7 +7963,7 @@ impl StarfundEscrow {
 
         DeprecatedTransferAdminUsed {
             name: symbol_short!("depr_xfer"),
-            invoice_id,
+            invoice_id: escrow.invoice_id.clone(),
             proposed_address: new_admin,
         }
         .publish(&env);
