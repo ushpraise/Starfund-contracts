@@ -817,12 +817,12 @@ pub enum EscrowError {
 
     /// Attempted to accept admin role when no pending admin exists.
     /// @dev Historical note: Prior to PR #XYZ, this shared discriminant 163 with `FundingDeadlinePassed`.
-    /// Reassigned to 81 to maintain uniqueness within the admin-handover range.
-    NoPendingAdmin = 81,
+    /// Assigned a fresh append-only discriminant to preserve the existing maturity code.
+    NoPendingAdmin = 250,
     /// Admin-nonce replay protection: the supplied nonce does not match the current expected nonce.
     /// Returned for stale (old), duplicate (same), or future (out-of-sequence) nonces.
     /// Does not leak which specific mismatch occurred to avoid giving attackers information.
-    AdminNonceMismatch = 85,
+    AdminNonceMismatch = 251,
     /// The contract's funding-token balance is less than `funded_amount` at withdraw time.
     /// Funds must be custodied in this contract before the SME can pull them.
     InsufficientContractBalance = 165,
@@ -831,8 +831,6 @@ pub enum EscrowError {
     MaturityInPast = 166,
     /// [`validate_maturity_bounds`] rejected a maturity timestamp beyond the configured horizon.
     MaturityExceedsMaxHorizon = 167,
-    /// [`StarfundEscrow::revoke_attestation_digest`] called on a non-revoked index.
-    AttestationNotRevoked = 168,
     /// [`StarfundEscrow::update_funding_deadline`] called while escrow is not open.
     FundingDeadlineUpdateNotOpen = 169,
     /// [`StarfundEscrow::claim_investor_payout`] computed a zero payout.
@@ -849,7 +847,7 @@ pub enum EscrowError {
     /// Inbound token transfer detected recipient balance delta underflow.
     InboundRecipientBalanceUnderflow = 175,
     /// Inbound token transfer detected recipient received amount differs from requested transfer.
-    InboundRecipientBalanceDeltaMismatch = 176,
+    InboundRecipientBalanceDeltaMismatch = 252,
 
     /// [`StarfundEscrow::fund`] blocked while operational pause is active.
     PausedBlocksFunding = 210,
@@ -859,6 +857,8 @@ pub enum EscrowError {
     PausedBlocksWithdrawal = 212,
     /// [`StarfundEscrow::claim_investor_payout`] blocked while operational pause is active.
     PausedBlocksInvestorClaims = 213,
+    /// [`StarfundEscrow::set_paused`] attempted to clear a pause with a non-matching scope.
+    PauseScopeMismatch = 214,
 
     /// [`StarfundEscrow::init`] rejected `protocol_fee_bps` outside `0..=10_000`.
     ProtocolFeeBpsOutOfRange = 215,
@@ -947,24 +947,24 @@ pub enum EscrowError {
     DisputeNotOpen = 247,
 
     /// [`StarfundEscrow::execute_callback`] called from an origin address different from the registered origin context.
-    CallbackWrongOrigin = 240,
+    CallbackWrongOrigin = 253,
     /// [`StarfundEscrow::execute_callback`] called with an invocation nonce that does not match the stored context.
-    CallbackWrongNonce = 241,
+    CallbackWrongNonce = 254,
     /// [`StarfundEscrow::execute_callback`] called with a lifecycle phase different from the expected phase.
-    CallbackWrongPhase = 242,
+    CallbackWrongPhase = 255,
     /// [`StarfundEscrow::execute_callback`] called with a callback context that has already been consumed (replay attempt).
-    CallbackReplayed = 243,
+    CallbackReplayed = 256,
     /// [`StarfundEscrow::execute_callback`] or [`StarfundEscrow::register_callback`] called after the escrow has been cancelled.
-    CallbackAfterCancellation = 244,
+    CallbackAfterCancellation = 257,
     /// [`StarfundEscrow::execute_callback`] called with a nonce that has no registered callback context.
-    CallbackNotFound = 245,
+    CallbackNotFound = 258,
     /// [`StarfundEscrow::rebind_registry`] called when escrow status is no longer open
     /// (status != 0). The registry hint becomes immutable once funding/settlement begins.
-    RegistryImmutableAfterFunding = 246,
+    RegistryImmutableAfterFunding = 259,
     /// [`StarfundEscrow::rotate_beneficiary`] called when escrow status is no longer
     /// pre-settlement (status must be 0 = open or 1 = funded). Beneficiary is immutable after
     /// funding closes.
-    BeneficiaryImmutableAfterFunding = 247,
+    BeneficiaryImmutableAfterFunding = 260,
     /// [`StarfundEscrow::execute_admin_recovery`] called before the pending admin proposal
     /// timelock (`DataKey::PendingAdminExpiry`) has elapsed. Recovery is only available
     /// after the abandoned-transfer expiry window passes.
@@ -1341,6 +1341,9 @@ pub enum DataKey {
     /// Used by [`StarfundEscrow::sweep_terminal_dust`] to compute outstanding liabilities:
     /// `outstanding = funded_amount - distributed_principal`.
     DistributedPrincipal,
+    /// Running total of principal released to the SME via [`StarfundEscrow::release`].
+    /// Absent ⇒ `0`; used to enforce that cumulative releases do not exceed funded principal.
+    ReleasedAmount,
     /// Configured maximum maturity horizon in seconds from current ledger time.
     /// Absent ΓçÆ falls back to [`DEFAULT_MATURITY_MAX_HORIZON_SECS`].
     /// Set at init and updatable via [`StarfundEscrow::update_maturity_max_horizon`].
@@ -1379,6 +1382,9 @@ pub enum DataKey {
     /// [`DataKey::PauseMaxDurationSecs`] to compute auto-expiry. Absent ⇒ pause was never
     /// activated.
     PausedAt,
+    /// Persisted typed scope and reason for the active operational pause.
+    /// Absent ⇒ no typed pause state is recorded (including legacy global pauses).
+    PauseState,
     /// Optional cap on the number of [`StarfundEscrow::set_paused`] calls allowed within
     /// [`DataKey::PauseToggleWindowSecs`]. Absent ⇒ `0` (unlimited), identical to pre-existing
     /// behavior. Set via [`StarfundEscrow::set_pause_rate_limit`].
@@ -1399,6 +1405,9 @@ pub enum DataKey {
     /// Monotonically increasing invocation nonce counter for cross-contract callbacks.
     /// Absent ⇒ `0`. Incremented on each callback registration.
     CallbackNonce,
+    /// Monotonically increasing nonce for replay protection on dual-auth admin entrypoints.
+    /// Absent ⇒ `0`, preserving backward compatibility for legacy deployments.
+    AdminNonce,
     /// Stored cross-contract callback context ([`CallbackContext`]) keyed by invocation nonce.
     /// Binds expected origin address, invocation nonce, and lifecycle phase.
     CallbackContext(u64),
