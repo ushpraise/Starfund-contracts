@@ -403,9 +403,6 @@ pub const MAX_SETTLE_BATCH: u32 = 50;
 /// Upper bound on [`StarfundEscrow::refund_batch`] entries to keep storage/CPU bounded.
 pub const MAX_REFUND_BATCH: u32 = 50;
 
-/// Upper bound on [`StarfundEscrow::set_investors_allowlisted`] batch size.
-pub const MAX_INVESTOR_ALLOWLIST_BATCH: u32 = 32;
-
 /// Upper bound on [`StarfundEscrow::get_contributions`] / investor read batch size.
 pub const MAX_INVESTOR_READ_BATCH: u32 = 50;
 
@@ -816,13 +813,11 @@ pub enum EscrowError {
     NewSmeSameAsCurrent = 162,
 
     /// Attempted to accept admin role when no pending admin exists.
-    /// @dev Historical note: Prior to PR #XYZ, this shared discriminant 163 with `FundingDeadlinePassed`.
-    /// Reassigned to 81 to maintain uniqueness within the admin-handover range.
-    NoPendingAdmin = 81,
+    NoPendingAdmin = 250,
     /// Admin-nonce replay protection: the supplied nonce does not match the current expected nonce.
     /// Returned for stale (old), duplicate (same), or future (out-of-sequence) nonces.
     /// Does not leak which specific mismatch occurred to avoid giving attackers information.
-    AdminNonceMismatch = 85,
+    AdminNonceMismatch = 251,
     /// The contract's funding-token balance is less than `funded_amount` at withdraw time.
     /// Funds must be custodied in this contract before the SME can pull them.
     InsufficientContractBalance = 165,
@@ -831,8 +826,6 @@ pub enum EscrowError {
     MaturityInPast = 166,
     /// [`validate_maturity_bounds`] rejected a maturity timestamp beyond the configured horizon.
     MaturityExceedsMaxHorizon = 167,
-    /// [`StarfundEscrow::revoke_attestation_digest`] called on a non-revoked index.
-    AttestationNotRevoked = 168,
     /// [`StarfundEscrow::update_funding_deadline`] called while escrow is not open.
     FundingDeadlineUpdateNotOpen = 169,
     /// [`StarfundEscrow::claim_investor_payout`] computed a zero payout.
@@ -849,7 +842,7 @@ pub enum EscrowError {
     /// Inbound token transfer detected recipient balance delta underflow.
     InboundRecipientBalanceUnderflow = 175,
     /// Inbound token transfer detected recipient received amount differs from requested transfer.
-    InboundRecipientBalanceDeltaMismatch = 176,
+    InboundRecipientBalanceDeltaMismatch = 252,
 
     /// [`StarfundEscrow::fund`] blocked while operational pause is active.
     PausedBlocksFunding = 210,
@@ -947,24 +940,24 @@ pub enum EscrowError {
     DisputeNotOpen = 247,
 
     /// [`StarfundEscrow::execute_callback`] called from an origin address different from the registered origin context.
-    CallbackWrongOrigin = 240,
+    CallbackWrongOrigin = 253,
     /// [`StarfundEscrow::execute_callback`] called with an invocation nonce that does not match the stored context.
-    CallbackWrongNonce = 241,
+    CallbackWrongNonce = 254,
     /// [`StarfundEscrow::execute_callback`] called with a lifecycle phase different from the expected phase.
-    CallbackWrongPhase = 242,
+    CallbackWrongPhase = 255,
     /// [`StarfundEscrow::execute_callback`] called with a callback context that has already been consumed (replay attempt).
-    CallbackReplayed = 243,
+    CallbackReplayed = 256,
     /// [`StarfundEscrow::execute_callback`] or [`StarfundEscrow::register_callback`] called after the escrow has been cancelled.
-    CallbackAfterCancellation = 244,
+    CallbackAfterCancellation = 257,
     /// [`StarfundEscrow::execute_callback`] called with a nonce that has no registered callback context.
-    CallbackNotFound = 245,
+    CallbackNotFound = 258,
     /// [`StarfundEscrow::rebind_registry`] called when escrow status is no longer open
     /// (status != 0). The registry hint becomes immutable once funding/settlement begins.
-    RegistryImmutableAfterFunding = 246,
+    RegistryImmutableAfterFunding = 259,
     /// [`StarfundEscrow::rotate_beneficiary`] called when escrow status is no longer
     /// pre-settlement (status must be 0 = open or 1 = funded). Beneficiary is immutable after
     /// funding closes.
-    BeneficiaryImmutableAfterFunding = 247,
+    BeneficiaryImmutableAfterFunding = 260,
     /// [`StarfundEscrow::execute_admin_recovery`] called before the pending admin proposal
     /// timelock (`DataKey::PendingAdminExpiry`) has elapsed. Recovery is only available
     /// after the abandoned-transfer expiry window passes.
@@ -974,6 +967,24 @@ pub enum EscrowError {
     /// This bounds the worst-case release instruction budget that scales with participant
     /// count when `max_unique_investors` was not configured at init.
     UniqueInvestorHardCapReached = 249,
+    /// [`StarfundEscrow::lower_min_contribution_floor`] received a non-positive floor.
+    NewFloorNotPositive = 261,
+    /// [`StarfundEscrow::lower_min_contribution_floor`] did not strictly lower the floor.
+    NewFloorNotLower = 262,
+    /// [`StarfundEscrow::raise_max_per_investor`] called without a configured cap.
+    MaxPerInvestorCapNotConfigured = 263,
+    /// [`StarfundEscrow::raise_max_per_investor`] did not strictly raise the cap.
+    MaxPerInvestorCapNotRaised = 264,
+    /// [`StarfundEscrow::extend_funding_deadline`] did not extend an existing deadline.
+    FundingDeadlineNotExtended = 265,
+    /// [`StarfundEscrow::raise_maturity_max_horizon`] did not strictly raise the horizon.
+    HorizonNotRaised = 266,
+    /// [`StarfundEscrow::record_sme_collateral_commitment_batch`] received an empty batch.
+    CollateralBatchEmpty = 267,
+    /// [`StarfundEscrow::record_sme_collateral_commitment_batch`] exceeded the batch limit.
+    CollateralBatchTooLarge = 268,
+    /// [`StarfundEscrow::lower_min_contribution_floor`] called while escrow is not open.
+    FloorLowerNotOpen = 269,
 }
 
 #[inline(always)]
