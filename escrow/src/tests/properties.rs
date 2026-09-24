@@ -94,6 +94,47 @@ proptest! {
             prop_assert_eq!(after_fund.status, 0);
         }
     }
+
+    #[test]
+    fn prop_release_tranches_preserve_accounting(
+        tranches in proptest::collection::vec(1i128..=TARGET, 1usize..=12),
+    ) {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, _, _) = init_and_fund_with_real_token(&env, TARGET, "RELPROP");
+
+        let funded_amount = client.get_escrow().funded_amount;
+        let mut released_amount = 0i128;
+
+        for tranche in tranches {
+            let remaining = funded_amount - released_amount;
+            if remaining == 0 {
+                break;
+            }
+
+            let release_amount = tranche.min(remaining);
+            client.release(&release_amount);
+            let escrow = client.get_escrow();
+
+            released_amount += release_amount;
+            prop_assert!(released_amount <= funded_amount);
+            prop_assert_eq!(escrow.status, if released_amount == funded_amount { 3 } else { 1 });
+        }
+
+        let remaining = funded_amount - released_amount;
+        if remaining > 0 {
+            client.release(&remaining);
+            released_amount += remaining;
+        }
+
+        let final_escrow = client.get_escrow();
+        prop_assert_eq!(released_amount, funded_amount);
+        prop_assert_eq!(final_escrow.status, 3);
+        assert_contract_error(
+            client.try_release(&1),
+            EscrowError::ReleaseNotFunded,
+        );
+    }
 }
 
 /// Generate a positive i128 amount bounded by `max`.
