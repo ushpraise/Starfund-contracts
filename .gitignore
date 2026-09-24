@@ -2,7 +2,7 @@
 /target/
 target_local/
 **/*.rs.bk
-Cargo.lock
+# Root Cargo.lock is intentionally tracked for reproducible builds.
 .cargo/
 
 # Local command outputs (generated)
