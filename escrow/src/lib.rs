@@ -974,6 +974,29 @@ pub enum EscrowError {
     /// This bounds the worst-case release instruction budget that scales with participant
     /// count when `max_unique_investors` was not configured at init.
     UniqueInvestorHardCapReached = 249,
+
+    /// [`StarfundEscrow::release`] received a non-positive amount.
+    ReleaseAmountNotPositive = 250,
+    /// [`StarfundEscrow::release`] blocked while operational pause is active.
+    PausedBlocksRelease = 251,
+    /// [`StarfundEscrow::release`] blocked while a legal hold is active.
+    LegalHoldBlocksRelease = 252,
+    /// [`StarfundEscrow::release`] called before escrow reached funded status.
+    ReleaseNotFunded = 253,
+    /// [`StarfundEscrow::release`] requested more than the unreleased principal.
+    ReleaseExceedsRemaining = 254,
+    /// [`StarfundEscrow::partial_settle`] blocked while a legal hold is active.
+    LegalHoldBlocksPartialSettle = 255,
+    /// [`StarfundEscrow::partial_settle`] caller is neither the SME nor admin.
+    PartialSettleUnauthorizedCaller = 256,
+    /// [`StarfundEscrow::partial_settle`] called while escrow is not open.
+    PartialSettleNotOpen = 257,
+    /// [`StarfundEscrow::rotate_payer`] blocked while a legal hold is active.
+    LegalHoldBlocksPayerRotation = 258,
+    /// [`StarfundEscrow::rotate_payer`] called while escrow is not open or funded.
+    PayerRotationNotOpen = 259,
+    /// [`StarfundEscrow::rotate_payer`] proposed the current payer address.
+    NewPayerSameAsCurrent = 260,
 }
 
 #[inline(always)]
@@ -1407,6 +1430,12 @@ pub enum DataKey {
     /// reads as `false`. Written by the dispute lifecycle (admin/off-chain) and checked by
     /// [`StarfundEscrow::close_escrow`].
     Dispute,
+    /// Running total of principal released to the SME; absent ⇒ `0` for legacy instances.
+    ReleasedAmount,
+    /// Expected nonce for admin replay protection; absent ⇒ `0`.
+    AdminNonce,
+    /// Funding-token decimal scale used to validate token amounts; absent until initialization.
+    FundingTokenScale,
 }
 
 // --- Data types ---
