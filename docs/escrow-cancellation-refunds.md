@@ -9,7 +9,7 @@ This document provides a detailed end-to-end explanation of the cancellation, re
 When an escrow is open and active (status `0`), it accepts funding contributions from investors. If the project/invoice funding fails to reach its target or needs to be terminated early, the escrow can be transitioned into a terminal cancelled state.
 
 ### Triggering cancel_funding
-- **Auth**: The [`InvoiceEscrow::admin`] is the only role authorized to call [`StarfundEscrow::cancel_funding`](file:///c:/Users/enwer/OneDrive/Documents/Code%20Projects/OS%20Contributions/Starfund-contracts/escrow/src/lib.rs#L3783).
+- **Auth**: The [`InvoiceEscrow::admin`] is the only role authorized to call [`StarfundEscrow::cancel_funding`](../escrow/src/lib.rs).
 - **Conditions**:
   - The escrow status must be exactly `0` (Open). Funded escrows (status `1`), settled escrows (status `2`), etc., cannot be cancelled.
   - No legal hold is active on the escrow (`legal_hold_active` must be `false`).
@@ -17,8 +17,8 @@ When an escrow is open and active (status `0`), it accepts funding contributions
   - The status is set to `4` (Cancelled).
   - A `FundingCancelled` event is published containing the `funded_amount` at the moment of cancellation.
 - **Unlocks**:
-  - Transitioning to status `4` unlocks the [`StarfundEscrow::refund`](file:///c:/Users/enwer/OneDrive/Documents/Code%20Projects/OS%20Contributions/Starfund-contracts/escrow/src/lib.rs#L3816) entrypoint for all contributing investors.
-  - It also allows the treasury to call [`StarfundEscrow::sweep_terminal_dust`](file:///c:/Users/enwer/OneDrive/Documents/Code%20Projects/OS%20Contributions/Starfund-contracts/escrow/src/lib.rs#L1447) (subject to the liability floor).
+  - Transitioning to status `4` unlocks the [`StarfundEscrow::refund`](../escrow/src/lib.rs) entrypoint for all contributing investors.
+  - It also allows the treasury to call [`StarfundEscrow::sweep_terminal_dust`](../escrow/src/lib.rs) (subject to the liability floor).
 
 ---
 
@@ -27,7 +27,7 @@ When an escrow is open and active (status `0`), it accepts funding contributions
 Once the escrow is cancelled, investors are entitled to claim their contributed principal back.
 
 ### Authorization & Safety
-- **Auth**: Each investor must call [`StarfundEscrow::refund`](file:///c:/Users/enwer/OneDrive/Documents/Code%20Projects/OS%20Contributions/Starfund-contracts/escrow/src/lib.rs#L3816) themselves. The call requires `investor.require_auth()`.
+- **Auth**: Each investor must call [`StarfundEscrow::refund`](../escrow/src/lib.rs) themselves. The call requires `investor.require_auth()`.
 - **Idempotency**: The refund logic uses the **Checks-Effects-Interactions** pattern to ensure idempotency and prevent double-spending:
   1. **Check**: The contract verifies that the investor's recorded contribution (stored in `DataKey::InvestorContribution`) is greater than zero.
   2. **Effect**: The investor's contribution is zeroed out, and `DataKey::InvestorRefunded(investor)` is set to `true`.
@@ -41,7 +41,7 @@ Once the escrow is cancelled, investors are entitled to claim their contributed 
 
 ## 3. Residual Dust Sweeping and the Liability Floor
 
-The [`StarfundEscrow::sweep_terminal_dust`](file:///c:/Users/enwer/OneDrive/Documents/Code%20Projects/OS%20Contributions/Starfund-contracts/escrow/src/lib.rs#L1447) entrypoint is designed to allow the protocol treasury to recover rounding residue or accidental transfers. In a cancelled escrow, it enforces a strict **liability floor** to protect un-refunded investor funds.
+The [`StarfundEscrow::sweep_terminal_dust`](../escrow/src/lib.rs) entrypoint is designed to allow the protocol treasury to recover rounding residue or accidental transfers. In a cancelled escrow, it enforces a strict **liability floor** to protect un-refunded investor funds.
 
 ### The Liability Floor Invariant
 To prevent the treasury from sweeping funds that are still owed to investors, the contract enforces:

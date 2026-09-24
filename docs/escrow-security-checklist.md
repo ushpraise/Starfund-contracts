@@ -18,7 +18,7 @@ Every state-mutating entrypoint and the identity required to authorize it.
 | `update_maturity` | `escrow.admin` | `escrow.admin.require_auth()` | Only in `status == 0` |
 | `update_funding_target` | `escrow.admin` | `escrow.admin.require_auth()` | Only in `status == 0`; `new_target >= funded_amount` |
 | `set_legal_hold` / `clear_legal_hold` | `escrow.admin` | `escrow.admin.require_auth()` | No timelock; no multisig enforced on-chain |
-| `set_paused` | `escrow.admin` | `escrow.admin.require_auth()` | Operational pause, orthogonal to legal hold; single-call toggle, **no** clear delay |
+| `set_paused` | `escrow.admin` | `escrow.admin.require_auth()` | Scoped operational pause, orthogonal to legal hold; clear requires a matching scope or `PauseScope::All` |
 | `set_allowlist_active` | `escrow.admin` | `escrow.admin.require_auth()` | Enables/disables `AllowlistActive` gate |
 | `set_investor_allowlisted` | `escrow.admin` | `escrow.admin.require_auth()` | Writes to **persistent** storage (see §5.4) |
 | `bind_primary_attestation_hash` | `escrow.admin` | `escrow.admin.require_auth()` | Single-set; second call panics |
@@ -230,12 +230,13 @@ See `docs/escrow-legal-hold.md` § "Failure mode: hold + lost admin key".
 ### 5.10 Operational pause is orthogonal to legal hold
 
 `DataKey::Paused` is a lightweight incident-response circuit breaker toggled by
-the **current** `escrow.admin` via `set_paused(active)` and read via `is_paused()`.
+the **current** `escrow.admin` via `set_paused(active, scope, reason)` and read via `is_paused()`.
 It is **independent** of `LegalHold`:
 
 - It carries **no compliance semantics** and has **no** two-phase clear delay — a
-  single authorized call flips it on or off, suitable for fast incident response
-  (e.g. a suspected token bug).
+  single authorized call changes it, suitable for fast incident response (e.g. a
+  suspected token bug). The active `PauseScope` can target funding, settlement,
+  withdrawal, claims, or all gated flows.
 - It gates `fund`, `settle`, `withdraw`, and `claim_investor_payout` as a read-only
   precondition **before** `require_auth` (ADR-002 / §6 ordering), with dedicated
   typed errors (`PausedBlocksFunding`, `PausedBlocksSettlement`,
@@ -268,35 +269,38 @@ SEP-41 token transfer occurs until the relevant `require_auth` succeeds.
 Reading `DataKey::Escrow` before step 2 is **intentional** — it is read-only
 and does not weaken the auth boundary. Refactors must not move step 3 above step 2.
 
-### Entrypoint checklist
+### Complete public entrypoint inventory
 
-| Entrypoint | Signer | Pre-auth reads (no writes) | `require_auth` | First mutation |
-|---|---|---|---|---|
-| `init` | `admin` | — | line ~549 (`admin`) | `DataKey::Escrow` set |
-| `propose_admin` | current `escrow.admin` | `get_escrow` | line ~1888 | `DataKey::PendingAdmin` set |
-| `accept_admin` | `DataKey::PendingAdmin` | pending read, `get_escrow` after auth | line ~1917 | `DataKey::Escrow` set |
-| `update_maturity` | `escrow.admin` | `get_escrow` | line ~1400 | `DataKey::Escrow` set |
-| `update_funding_target` | `escrow.admin` | `get_escrow` | line ~1007 | `DataKey::Escrow` set |
-| `set_legal_hold` / `clear_legal_hold` | current `escrow.admin` | `get_escrow` | line ~940 | `DataKey::LegalHold` set |
-| `set_paused` | current `escrow.admin` | `get_escrow` | `escrow.admin` (via `load_escrow_require_admin`) | `DataKey::Paused` set |
-| `set_allowlist_active` | `escrow.admin` | `get_escrow` | line ~956 | `DataKey::AllowlistActive` set |
-| `set_investor_allowlisted` | `escrow.admin` | `get_escrow` | line ~978 | persistent allowlist set |
-| `bind_primary_attestation_hash` | `escrow.admin` | `get_escrow`, `has` check | line ~791 | `PrimaryAttestationHash` set |
-| `append_attestation_digest` | `escrow.admin` | `get_escrow`, log read | line ~820 | log append + set |
-| `fund` / `fund_with_commitment` | `investor` | floor read | line ~1119 (`investor`) | per-investor keys |
-| `record_sme_collateral_commitment` | `escrow.sme_address` | `get_escrow` | line ~911 | collateral set |
-| `settle` | `escrow.sme_address` | pause, legal hold, `get_escrow` | line ~1282 | `DataKey::Escrow` set |
-| `withdraw` | `escrow.sme_address` | pause, legal hold, `get_escrow` | line ~1321 | `DataKey::Escrow` set |
-| `claim_investor_payout` | `investor` | pause, legal hold, contribution read | line ~1350 | `InvestorClaimed` set |
-| `sweep_terminal_dust` | `treasury` | legal hold, `get_escrow`, treasury read | line ~702 | SEP-41 transfer |
-| `migrate` | **none** (panics) | version read only | — | none (all paths panic) |
+The complete public surface is listed below by function name. Names are durable
+Rust symbols; implementation details and authorization must be checked in
+[`escrow/src/lib.rs`](../escrow/src/lib.rs), rather than by relying on drifting
+line numbers.
 
-Line numbers refer to `escrow/src/lib.rs` at schema version 6; re-audit after refactors.
+| Area | Public entrypoints |
+|---|---|
+| Lifecycle and dispute | `close_escrow`, `get_closure_metadata`, `set_dispute_active`, `open_dispute`, `close_dispute` |
+| Fee schedules and balances | `submit_fee_schedule`, `activate_fee_schedule`, `get_active_fee_schedule`, `get_pending_fee_schedule`, `get_previous_fee_schedule`, `get_token_balance`, `balance`, `transfer` |
+| Initialization and core views | `init`, `get_escrow`, `get_funding_token`, `get_treasury`, `get_registry_ref`, `rebind_registry_ref`, `clear_registry_ref`, `get_version`, `get_funding_deadline`, `get_admin_nonce`, `is_funding_expired`, `get_escrow_summary` |
+| Admin and configuration | `propose_admin`, `accept_admin`, `transfer_admin`, `cancel_pending_admin`, `recover_admin`, `update_maturity`, `update_funding_target`, `update_funding_deadline`, `extend_funding_deadline`, `update_maturity_max_horizon`, `raise_maturity_max_horizon`, `get_maturity_max_horizon`, `lower_max_unique_investors`, `raise_max_unique_investors`, `get_max_unique_investors_cap`, `get_remaining_investor_slots`, `lower_min_contribution_floor`, `get_min_contribution_floor`, `raise_max_per_investor`, `get_max_per_investor_cap`, `set_protocol_fee_bps`, `get_protocol_fee_bps` |
+| Funding and settlement | `fund`, `fund_with_commitment`, `fund_batch`, `partial_settle`, `settle`, `settle_batch`, `release`, `withdraw`, `claim_investor_payout`, `get_claimable_payout`, `compute_investor_payout`, `get_settlement_pool`, `get_settlement_config`, `is_settleable`, `get_settlement_readiness` |
+| Funding views and yield | `get_contribution`, `get_contributions`, `get_investors`, `get_funding_records`, `get_funding_close_snapshot`, `get_settled_at`, `get_investor_yield_bps`, `get_investor_claim_not_before`, `get_yield_tiers`, `get_yield_tiers_page`, `preview_yield_tier`, `update_yield_bps`, `get_unique_funder_count` |
+| Cancellation and refunds | `cancel_funding`, `refund`, `refund_batch`, `unfund`, `is_investor_refunded`, `get_distributed_principal`, `get_reconciliation`, `sweep_terminal_dust` |
+| Collateral and beneficiary | `record_sme_collateral_commitment`, `batch_record_collateral`, `get_sme_collateral_commitment`, `clear_sme_collateral_commitment`, `rotate_beneficiary`, `rotate_payer`, `has_maturity_lock` |
+| Attestations | `bind_primary_attestation_hash`, `get_primary_attestation_hash`, `append_attestation_digest`, `get_attestation_append_log`, `get_attestation_digest_at`, `revoke_attestation_digest`, `revoke_attestation_digests`, `is_attestation_revoked`, `get_revoked_attestation_digests`, `get_attestation_digests`, `unrevoke_attestation_digest` |
+| Pause and legal hold | `set_paused`, `get_pause_state`, `is_paused`, `set_pause_max_duration`, `get_pause_max_duration`, `get_paused_at`, `set_pause_rate_limit`, `get_pause_rate_limit`, `set_legal_hold`, `request_clear_legal_hold`, `clear_legal_hold`, `get_legal_hold`, `get_legal_hold_clear_delay`, `get_legal_hold_clearable_at` |
+| Allowlist | `set_allowlist_active`, `is_allowlist_active`, `set_investor_allowlisted`, `set_investors_allowlisted`, `is_investor_allowlisted`, `get_allowlisted_investors`, `get_allowlisted_investors_count` |
+| Storage and upgrades | `migrate`, `upgrade`, `get_storage_limit`, `set_storage_limit`, `bump_ttl` |
+| Callbacks | `register_callback`, `execute_callback`, `get_callback`, `get_callback_nonce`, `is_callback_consumed` |
+| Other views | `is_dispute_active`, `get_dispute_record`, `get_remaining_funding_capacity`, `get_rent_bump_plan`, `is_investor_claimed` |
+
+The inventory includes read-only views and the SEP-41 token methods because all
+are exported public functions on `StarfundEscrow`. The auth matrix above covers
+state-changing paths; read-only views do not require authorization.
 
 ### Negative-auth test coverage
 
 All state-mutating entrypoints are actively tested against incorrect authorization rules.
-See the canonical compliance test section in [`escrow/src/tests/admin.rs`](file:///home/demigodjayydy/Desktop/Starfund-contracts/escrow/src/tests/admin.rs) under `auth_audit_*`.
+See the canonical compliance test section in [`escrow/src/tests/admin.rs`](../escrow/src/tests/admin.rs) under `auth_audit_*`.
 
 | Entrypoint | Test location |
 |---|---|
