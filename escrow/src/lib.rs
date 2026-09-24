@@ -974,6 +974,44 @@ pub enum EscrowError {
     /// This bounds the worst-case release instruction budget that scales with participant
     /// count when `max_unique_investors` was not configured at init.
     UniqueInvestorHardCapReached = 249,
+
+    /// [`StarfundEscrow::release`] received a non-positive amount.
+    ReleaseAmountNotPositive = 250,
+    /// [`StarfundEscrow::release`] is blocked while operational pause is active.
+    PausedBlocksRelease = 251,
+    /// [`StarfundEscrow::release`] is blocked while a legal hold is active.
+    LegalHoldBlocksRelease = 252,
+    /// [`StarfundEscrow::release`] was called before funding or after withdrawal.
+    ReleaseNotFunded = 253,
+    /// [`StarfundEscrow::release`] exceeded the remaining funded obligation.
+    ReleaseExceedsRemaining = 254,
+
+    /// [`StarfundEscrow::partial_settle`] was called after funding closed.
+    PartialSettleNotOpen = 255,
+    /// [`StarfundEscrow::partial_settle`] caller is neither the SME nor the admin.
+    PartialSettleUnauthorizedCaller = 256,
+    /// [`StarfundEscrow::partial_settle`] is blocked while a legal hold is active.
+    LegalHoldBlocksPartialSettle = 257,
+
+    /// [`StarfundEscrow::rotate_payer`] proposed the current payer.
+    NewPayerSameAsCurrent = 258,
+    /// [`StarfundEscrow::rotate_payer`] was called after settlement.
+    PayerRotationNotOpen = 259,
+    /// [`StarfundEscrow::rotate_payer`] is blocked while a legal hold is active.
+    LegalHoldBlocksPayerRotation = 260,
+
+    /// [`StarfundEscrow::lower_min_contribution_floor`] received a non-positive floor.
+    NewFloorNotPositive = 261,
+    /// [`StarfundEscrow::lower_min_contribution_floor`] did not lower the floor.
+    NewFloorNotLower = 262,
+    /// [`StarfundEscrow::raise_max_per_investor`] has no configured cap to raise.
+    MaxPerInvestorCapNotConfigured = 263,
+    /// [`StarfundEscrow::raise_max_per_investor`] did not raise the cap.
+    MaxPerInvestorCapNotRaised = 264,
+    /// [`StarfundEscrow::extend_funding_deadline`] did not extend an existing deadline.
+    FundingDeadlineNotExtended = 265,
+    /// [`StarfundEscrow::raise_maturity_max_horizon`] did not raise the horizon.
+    HorizonNotRaised = 266,
 }
 
 #[inline(always)]
@@ -1407,6 +1445,9 @@ pub enum DataKey {
     /// reads as `false`. Written by the dispute lifecycle (admin/off-chain) and checked by
     /// [`StarfundEscrow::close_escrow`].
     Dispute,
+    /// Running total of principal released to the SME via [`StarfundEscrow::release`].
+    /// Absent ⇒ `0` for legacy instances.
+    ReleasedAmount,
 }
 
 // --- Data types ---
