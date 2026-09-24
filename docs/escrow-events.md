@@ -152,6 +152,39 @@ Emitted when the admin extends an existing funding deadline while the escrow is 
 }
 ```
 
+### `FundingDeadlineUpdated`
+Emitted by `update_funding_deadline` whenever the admin sets or clears the
+funding deadline while the escrow is open.
+
+**Topics:**
+1. `fund_dl` (Symbol)
+2. `invoice_id` (Symbol)
+
+**Data Payload:**
+- `prior_deadline` (`Option<u64>`): the previously configured ledger timestamp,
+  or `None` when no deadline was configured.
+- `new_deadline` (`Option<u64>`): the new ledger timestamp, or `None` when the
+  deadline was cleared.
+
+**Emission semantics:**
+- `Some(d)` stores `d` after verifying it is later than the current ledger
+  timestamp.
+- `None` removes the stored deadline and allows funding without a time limit.
+- The event is emitted after the storage update and includes both the previous
+  and resulting values, so indexers can represent set, replace, and clear
+  operations without an additional read.
+
+**Example (JSON Decoded):**
+```json
+{
+  "topics": ["fund_dl", "INV_001"],
+  "data": {
+    "prior_deadline": 1714180000,
+    "new_deadline": 1714183600
+  }
+}
+```
+
 ### `InvestorAllowlistChanged`
 Emitted when an admin adds or removes an investor from the allowlist. This event is
 emitted per-address even when the change is performed via the batch entrypoint

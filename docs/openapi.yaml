@@ -186,6 +186,55 @@ components:
           description: Amount to contribute in stroops.
           example: 50000000000
 
+    UnfundEscrowRequest:
+      type: object
+      required: [investor_address, amount]
+      properties:
+        investor_address:
+          $ref: "#/components/schemas/StellarAddress"
+        amount:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Amount to return to the investor in stroops.
+          example: 1000000000
+
+    ReleaseEscrowRequest:
+      type: object
+      required: [amount]
+      properties:
+        amount:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Amount of funded principal to release to the SME.
+          example: 50000000000
+
+    RotateBeneficiaryRequest:
+      type: object
+      required: [new_sme_address, expected_nonce]
+      properties:
+        new_sme_address:
+          $ref: "#/components/schemas/StellarAddress"
+        expected_nonce:
+          type: integer
+          format: int32
+          minimum: 0
+
+    RotatePayerRequest:
+      type: object
+      required: [new_payer]
+      properties:
+        new_payer:
+          $ref: "#/components/schemas/StellarAddress"
+
+    PartialSettleRequest:
+      type: object
+      required: [caller]
+      properties:
+        caller:
+          $ref: "#/components/schemas/StellarAddress"
+
     # -- Responses -----------------------------------------------------------
 
     HealthResponse:
@@ -521,6 +570,176 @@ paths:
               example:
                 error: INVALID_STATE
                 message: "Escrow must be funded before payment confirmation."
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /escrow/{invoiceId}/unfund:
+    post:
+      operationId: unfundEscrow
+      summary: Return an investor contribution
+      description: Returns an investor's contribution while the escrow remains open via `StarfundEscrow.unfund`.
+      tags: [Escrow]
+      parameters:
+        - name: invoiceId
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/InvoiceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UnfundEscrowRequest"
+      responses:
+        "200":
+          description: Updated escrow state after the contribution is returned.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InvoiceEscrow"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /escrow/{invoiceId}/release:
+    post:
+      operationId: releaseEscrow
+      summary: Release funded principal
+      description: Releases funded principal to the SME through `StarfundEscrow.release`; the admin may call this incrementally until the obligation is exhausted.
+      tags: [Escrow]
+      parameters:
+        - name: invoiceId
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/InvoiceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReleaseEscrowRequest"
+      responses:
+        "200":
+          description: Updated escrow state after release.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InvoiceEscrow"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /escrow/{invoiceId}/partial-settle:
+    post:
+      operationId: partialSettleEscrow
+      summary: Close funding early
+      description: Forces an open escrow into funded status for settlement via `StarfundEscrow.partial_settle`; the caller must be the SME or admin.
+      tags: [Escrow]
+      parameters:
+        - name: invoiceId
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/InvoiceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PartialSettleRequest"
+      responses:
+        "200":
+          description: Updated escrow state after funding is closed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InvoiceEscrow"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /escrow/{invoiceId}/rotate-payer:
+    post:
+      operationId: rotatePayer
+      summary: Rotate the payer address
+      description: Changes the payer required for funding via `StarfundEscrow.rotate_payer`; both the current payer and admin authorize the operation.
+      tags: [Escrow]
+      parameters:
+        - name: invoiceId
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/InvoiceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RotatePayerRequest"
+      responses:
+        "200":
+          description: Updated escrow state after payer rotation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InvoiceEscrow"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /escrow/{invoiceId}/rotate-beneficiary:
+    post:
+      operationId: rotateBeneficiary
+      summary: Rotate the SME beneficiary
+      description: Changes the SME payout address via `StarfundEscrow.rotate_beneficiary`; the current SME and admin must both authorize the operation before funding begins.
+      tags: [Escrow]
+      parameters:
+        - name: invoiceId
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/InvoiceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RotateBeneficiaryRequest"
+      responses:
+        "200":
+          description: Updated escrow state after beneficiary rotation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InvoiceEscrow"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
         "500":
           $ref: "#/components/responses/InternalServerError"
 
