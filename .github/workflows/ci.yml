@@ -15,6 +15,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: 1.85.1
           components: rustfmt, clippy, llvm-tools-preview
           targets: wasm32v1-none
 
@@ -42,15 +43,28 @@ jobs:
         run: cargo build --target wasm32v1-none --release -p starfund_escrow
 
       - name: Workspace Clippy (all targets)
-        # Latent clippy denies in tests; keep signal without hard-failing CI.
-        continue-on-error: true
-        run: cargo clippy -p starfund_escrow --all-targets
+        run: cargo clippy -p starfund_escrow --all-targets -- -D warnings
 
       - name: Check coverage (report)
-        # Keep the report for reviewers; latent ignores temporarily affect line %.
-        continue-on-error: true
         run: |
           cargo llvm-cov \
             --features testutils \
             --summary-only \
+            --fail-under-lines 90 \
             -p starfund_escrow
+
+  cargo-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.85.1
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@cargo-audit
+
+      - name: Audit dependencies
+        run: cargo audit --locked
