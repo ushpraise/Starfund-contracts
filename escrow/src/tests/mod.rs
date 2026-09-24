@@ -90,6 +90,8 @@ mod yield_tier_boundaries;
 // mod admin_recovery;  // file not present in this tree
 mod decimal_scale_tests;
 mod release_tests;
+mod payer_recovery_tests;
+mod guard_ordering_tests;
 
 /// Registers a new escrow contract instance and returns its contract id.
 pub fn deploy_id(env: &Env) -> Address {

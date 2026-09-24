@@ -260,13 +260,22 @@ SEP-41 token transfer occurs until the relevant `require_auth` succeeds.
 ### Canonical sequence
 
 ```
-1. Read-only preconditions (legal hold, status, input asserts)
-2. Address::require_auth() for the bound role
-3. Storage writes and token transfers (external_calls only)
+1. Read-only preconditions (lightweight gates: operational pause)
+2. Address::require_auth() for the bound role (first auth)
+3. Read-only preconditions (status, legal hold, input asserts)
+4. Additional Address::require_auth() if multiple signers required (e.g. payer)
+5. Storage writes and token transfers (external_calls only)
 ```
 
+**Note:** `fund_impl` uses a variant of this pattern (issue #265) where steps 1–3 are
+interleaved: operational pause gates occur before step 2, but floor/decimal/status checks
+occur after step 2. This improves denial-of-service protection by validating input amounts
+early while still maintaining the invariant that storage writes occur only after all
+`require_auth` calls succeed. The pattern is: (1a) pause, (2) investor auth, (1b) input
+asserts + floor + status, (2b) payer auth, (3) writes.
+
 Reading `DataKey::Escrow` before step 2 is **intentional** — it is read-only
-and does not weaken the auth boundary. Refactors must not move step 3 above step 2.
+and does not weaken the auth boundary. Refactors must not move step 5 above step 2.
 
 ### Entrypoint checklist
 
@@ -283,7 +292,7 @@ and does not weaken the auth boundary. Refactors must not move step 3 above step
 | `set_investor_allowlisted` | `escrow.admin` | `get_escrow` | line ~978 | persistent allowlist set |
 | `bind_primary_attestation_hash` | `escrow.admin` | `get_escrow`, `has` check | line ~791 | `PrimaryAttestationHash` set |
 | `append_attestation_digest` | `escrow.admin` | `get_escrow`, log read | line ~820 | log append + set |
-| `fund` / `fund_with_commitment` | `investor` | floor read | line ~1119 (`investor`) | per-investor keys |
+| `fund` / `fund_with_commitment` | `investor` | pause gate | line ~6482 (`investor`) | per-investor keys |
 | `record_sme_collateral_commitment` | `escrow.sme_address` | `get_escrow` | line ~911 | collateral set |
 | `settle` | `escrow.sme_address` | pause, legal hold, `get_escrow` | line ~1282 | `DataKey::Escrow` set |
 | `withdraw` | `escrow.sme_address` | pause, legal hold, `get_escrow` | line ~1321 | `DataKey::Escrow` set |
