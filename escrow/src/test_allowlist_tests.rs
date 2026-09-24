@@ -1240,7 +1240,17 @@ fn allowlist_limit_can_be_updated_multiple_times() {
 /// Setting the limit to 0 (below MIN) is rejected with AllowlistLimitOutOfRange.
 #[test]
 fn allowlist_limit_zero_rejected_with_typed_error() {
-    // TODO: implement test body
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = deploy(&env);
+    init(&env, &client);
+
+    assert_contract_error_gate(
+        client.try_set_allowlist_limit(&0u32),
+        EscrowError::AllowlistLimitOutOfRange,
+    );
+    // Unchanged.
+    assert_eq!(client.get_allowlist_limit(), DEFAULT_ALLOWLIST_LIMIT);
 }
 
 #[test]
