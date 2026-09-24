@@ -124,13 +124,14 @@ successful unfund call.
 
 ### R11 — Typed errors are append-only
 
-Three new typed errors must be added to `EscrowError`:
+The implementation exposes these typed errors in `EscrowError`:
 
 | Variant | Code | Fires when |
 |---------|------|-----------|
-| `EscrowNotOpen` | 165 | `status != 0` |
-| `OverWithdrawal` | 166 | `amount > contribution` |
-| `LegalHoldActive` | 167 | hold is active |
+| `UnfundEscrowNotOpen` | 220 | `status != 0` |
+| `OverWithdrawal` | 221 | `amount > contribution` |
+| `UnfundLegalHoldActive` | 222 | hold is active |
+| `DisputeBlocksUnfund` | 242 | an active dispute blocks unfunding |
 
 Existing error codes must not be renumbered or removed.
 
