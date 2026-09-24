@@ -303,7 +303,7 @@ fn test_funding_amount_accumulation_overflow_panics() {
 }
 
 #[test]
-#[ignore = "upstream latent: escrow API/test drift"]
+#[ignore = "triaged: funding overflow path requires API reconciliation"]
 fn test_funding_amount_overflow_does_not_mutate_state() {
     let env = Env::default();
 
@@ -399,7 +399,7 @@ fn test_fund_with_commitment_overflow_panics() {
 }
 
 #[test]
-#[ignore = "upstream latent: escrow API/test drift"]
+#[ignore = "triaged: commitment overflow path requires API reconciliation"]
 fn test_fund_with_commitment_overflow_does_not_mutate_state() {
     let env = Env::default();
 
@@ -2462,7 +2462,7 @@ fn test_max_unique_investors_cap_none_allows_unlimited() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "triaged: cap enforcement requires typed assertion conversion"]
 
 fn test_max_unique_investors_cap_enforced_at_limit() {
     let env = Env::default();
@@ -2627,7 +2627,7 @@ fn test_max_unique_investors_cap_blocks_fund_with_commitment() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "triaged: cap re-funding path requires typed assertion conversion"]
 
 fn test_re_funding_same_address_doesnt_count_against_cap() {
     let env = Env::default();
@@ -2724,7 +2724,7 @@ fn test_zero_contribution_then_non_zero_contribution_counts_as_unique_investor()
 }
 
 #[test]
-#[ignore]
+#[ignore = "triaged: cap initialization path requires typed assertion conversion"]
 
 fn test_cap_validation_at_init_positive_value_required() {
     let env = Env::default();
@@ -2788,7 +2788,7 @@ fn test_init_panics_for_zero_cap() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "triaged: cap boundary path requires typed assertion conversion"]
 
 fn test_cap_edge_case_exact_limit_reached() {
     let env = Env::default();
@@ -2884,7 +2884,7 @@ fn test_cap_edge_case_exactly_one_over_limit_panics() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "triaged: cap and minimum contribution path requires typed assertion conversion"]
 
 fn test_cap_with_min_contribution_floor_interaction() {
     let env = Env::default();
@@ -2984,7 +2984,7 @@ fn test_cap_blocks_even_with_large_contribution() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "triaged: cap panic-message assertion requires typed error conversion"]
 
 fn test_cap_panic_message_quality() {
     let env = Env::default();
@@ -3384,7 +3384,7 @@ fn test_cancel_funding_preserves_funded_amount() {
 }
 
 #[test]
-#[ignore = "upstream latent: escrow API/test drift"]
+#[ignore = "triaged: cancelled dust-sweep path requires API reconciliation"]
 fn test_sweep_terminal_dust_allowed_in_cancelled_state() {
     let env = Env::default();
 
@@ -3911,7 +3911,7 @@ fn init_with_maturity(
 }
 
 #[test]
-#[ignore = "upstream latent: escrow API/test drift"]
+#[ignore = "triaged: commitment-lock path requires API reconciliation"]
 fn commitment_lock_within_maturity_is_accepted() {
     // now=1000, maturity=2000, lock=500 → claim_nb=1500 ≤ 2000  ✓
 
@@ -3939,7 +3939,7 @@ fn commitment_lock_within_maturity_is_accepted() {
 }
 
 #[test]
-#[ignore = "upstream latent: escrow API/test drift"]
+#[ignore = "triaged: commitment-lock boundary requires API reconciliation"]
 fn commitment_lock_exactly_at_maturity_is_accepted() {
     // now=1000, maturity=2000, lock=1000 → claim_nb=2000 == maturity  ✓ (inclusive)
 
@@ -3967,7 +3967,7 @@ fn commitment_lock_exactly_at_maturity_is_accepted() {
 }
 
 #[test]
-#[ignore = "upstream latent: escrow API/test drift"]
+#[ignore = "triaged: commitment-lock rejection requires API reconciliation"]
 fn commitment_lock_one_second_past_maturity_is_rejected() {
     // now=1000, maturity=2000, lock=1001 → claim_nb=2001 > 2000  ✗
 
@@ -4049,7 +4049,7 @@ fn zero_lock_with_maturity_is_always_accepted() {
 }
 
 #[test]
-#[ignore = "upstream latent: escrow API/test drift"]
+#[ignore = "triaged: zero-maturity commitment path requires API reconciliation"]
 fn lock_with_zero_maturity_is_always_accepted() {
     // maturity==0 means no maturity lock; any lock_secs is fine
 
@@ -4176,7 +4176,7 @@ fn test_fund_batch_rejects_oversized() {
 }
 
 #[test]
-#[ignore = "upstream latent: escrow API/test drift"]
+#[ignore = "triaged: batch-funding equivalence requires API reconciliation"]
 fn test_fund_batch_equals_n_single_funds() {
     let env = Env::default();
 
@@ -4420,7 +4420,7 @@ fn test_fund_batch_mid_batch_funded_transition() {
 
 #[test]
 #[should_panic(expected = "HostError: Error(Contract, #106)")]
-#[ignore = "upstream latent: escrow API/test drift"]
+#[ignore = "triaged: duplicate batch investor path requires API reconciliation"]
 fn test_fund_batch_duplicate_addresses() {
     let env = Env::default();
 
@@ -4480,7 +4480,7 @@ fn test_fund_batch_duplicate_addresses() {
 
 #[test]
 #[should_panic]
-#[ignore = "upstream latent: escrow API/test drift"]
+#[ignore = "triaged: batch authorization path requires API reconciliation"]
 fn test_fund_batch_per_investor_auth() {
     // Test that each investor in the batch must authorize their own entry.
 
@@ -4540,7 +4540,7 @@ fn test_fund_batch_single_entry() {
 }
 
 #[test]
-#[ignore = "upstream latent: escrow API/test drift"]
+#[ignore = "triaged: batch-size path requires API reconciliation"]
 fn test_fund_batch_max_batch_size() {
     let env = Env::default();
 
@@ -5311,7 +5311,7 @@ fn test_remaining_capacity_minimal_target() {
 /// Edge case: capacity with very large target (near i128::MAX).
 
 #[test]
-#[ignore = "upstream latent: escrow API/test drift"]
+#[ignore = "triaged: remaining-capacity path requires API reconciliation"]
 fn test_remaining_capacity_very_large_target() {
     let env = Env::default();
 
@@ -5805,7 +5805,7 @@ fn test_update_funding_target_settled_rejected() {
 /// emits `fund_tgt` with the correct old/new values.
 
 #[test]
-#[ignore = "upstream latent: escrow API/test drift"]
+#[ignore = "triaged: funding-target update path requires API reconciliation"]
 fn test_update_funding_target_raise_stays_open_emits_event() {
     use crate::FundingTargetUpdated;
 
@@ -5880,7 +5880,7 @@ fn test_update_funding_target_raise_stays_open_emits_event() {
 /// `fund_tgt` event still fires.
 
 #[test]
-#[ignore = "upstream latent: escrow API/test drift"]
+#[ignore = "triaged: funding-target promotion path requires API reconciliation"]
 fn test_update_funding_target_exact_funded_amount_promotes_to_funded() {
     use crate::FundingTargetUpdated;
 
@@ -6685,7 +6685,7 @@ fn init_with_funding_deadline<'a>(
 }
 
 #[test]
-#[ignore = "branch-specific latent failure"]
+#[ignore = "triaged: deadline-extension path has a branch-specific failure"]
 fn test_extend_funding_deadline_success_and_event() {
     use soroban_sdk::testutils::Events as _;
 

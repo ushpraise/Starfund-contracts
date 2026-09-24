@@ -65,7 +65,7 @@ fn remaining_attestation_slots(client: &StarfundEscrowClient<'_>) -> u32 {
 
 /// Happy path: first bind succeeds and is readable via the getter.
 #[test]
-#[ignore = "upstream latent: escrow API/test drift"]
+#[ignore = "triaged: bind-primary API drift requires follow-up"]
 fn test_bind_primary_hash_stores_and_reads() {
     let env = Env::default();
     let (client, _) = setup_with_init(&env);
@@ -808,7 +808,7 @@ fn test_revoked_digests_view_large_limit_caps_to_max_page() {
 }
 
 #[test]
-#[ignore = "branch-specific latent failure"]
+#[ignore = "triaged: revoked-digest view has a branch-specific failure"]
 fn test_revoked_digests_view_caps_limit() {
     let env = Env::default();
     let (client, _) = setup_with_init(&env);

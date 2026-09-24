@@ -818,7 +818,7 @@ fn settle_on_withdrawn_escrow_panics() {
 
 /// `sweep_terminal_dust` must reject open/funded escrows before terminal state.
 // HostError wraps contract panic; expected substring not matched in outer message.
-#[ignore = "HostError wraps contract panic; expected substring not matched"]
+#[ignore = "triaged: replace panic-string assertion with typed error matching"]
 #[test]
 #[should_panic(expected = "dust sweep only in terminal states (settled, withdrawn, or cancelled)")]
 fn sweep_terminal_dust_before_terminal_state_panics() {
@@ -970,7 +970,7 @@ fn test_sweep_terminal_dust_after_withdraw_and_ledger_tick() {
 }
 
 // HostError wraps contract panic; expected substring not matched.
-#[ignore = "HostError wraps contract panic; expected substring not matched"]
+#[ignore = "triaged: replace panic-string assertion with typed error matching"]
 #[test]
 #[should_panic]
 fn test_sweep_rejected_when_open() {
@@ -1038,7 +1038,7 @@ fn test_sweep_blocked_under_legal_hold() {
 }
 
 // HostError wraps contract panic; expected substring not matched.
-#[ignore = "HostError wraps contract panic; expected substring not matched"]
+#[ignore = "triaged: replace panic-string assertion with typed error matching"]
 #[test]
 #[should_panic]
 fn test_sweep_rejects_amount_above_dust_cap() {
@@ -1072,7 +1072,7 @@ fn test_sweep_rejects_amount_above_dust_cap() {
 }
 
 // Body calls claim_investor_payout for a stranger (panics); no #[should_panic].
-#[ignore = "body tests non-participant claim, not dust sweep capping; panics without #[should_panic]"]
+#[ignore = "triaged: test body targets claim authorization, not dust sweep capping"]
 #[test]
 fn test_sweep_caps_at_contract_balance() {
     let env = Env::default();
@@ -1470,7 +1470,7 @@ fn test_claim_marker_all_investors_independent() {
 }
 
 #[test]
-#[ignore = "upstream latent: escrow API/test drift"]
+#[ignore = "triaged: contribution view API drift requires follow-up"]
 fn investor_contribution_readable_after_withdraw() {
     let env = Env::default();
     let (client, token, _contract_id, _treasury) =
@@ -1491,7 +1491,7 @@ fn investor_contribution_readable_after_withdraw() {
 
 /// Multiple investors — each contribution is preserved after `withdraw`.
 #[test]
-#[ignore = "upstream latent: escrow API/test drift"]
+#[ignore = "triaged: contribution view API drift requires follow-up"]
 fn multi_investor_contributions_preserved_after_withdraw() {
     let env = Env::default();
     let (client, token, _contract_id, _treasury) =
