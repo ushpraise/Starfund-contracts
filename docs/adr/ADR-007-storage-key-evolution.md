@@ -61,6 +61,7 @@ independent TTL and the contract instance entry does not grow with investor card
 - `DataKey::InvestorEffectiveYield(Address)`
 - `DataKey::InvestorClaimNotBefore(Address)`
 - `DataKey::InvestorClaimed(Address)`
+- `DataKey::InvestorRefunded(Address)`
 
 Read/write semantics are unchanged: absent keys still default to `0`, base `yield_bps`, `0`, and
 `false` respectively. Per-investor persistent keys have their TTL extended at write time using `PERSISTENT_TTL_MIN_EXTENSION_LEDGERS`. See `docs/escrow-gas-storage-notes.md` for additional TTL extension via

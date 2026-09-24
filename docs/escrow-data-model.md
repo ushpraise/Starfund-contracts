@@ -70,8 +70,9 @@ storage slot and TTL.
 | `InvestorClaimed(Address)` | `bool` | `claim_investor_payout` | `false` |
 | `InvestorEffectiveYield(Address)` | `i64` (bps) | `fund_impl` on first deposit | `InvoiceEscrow::yield_bps` |
 | `InvestorClaimNotBefore(Address)` | `u64` (ledger timestamp) | `fund_impl` on first deposit | `0` (no gate) |
+| `InvestorRefunded(Address)` | `bool` | `refund` | `false` |
 
-All four per-address keys are written together on an investor's first `fund` or
+The contribution, yield, and claim-gate keys are written together on an investor's first `fund` or
 `fund_with_commitment` call. Subsequent `fund` calls update only `InvestorContribution`.
 
 ### Per-address allowlist keys in persistent storage

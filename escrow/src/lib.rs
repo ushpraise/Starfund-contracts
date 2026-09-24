@@ -514,6 +514,7 @@ pub(crate) fn extend_ttl_for_activity(env: &Env, escrow: &InvoiceEscrow, investo
             DataKey::InvestorEffectiveYield(addr.clone()),
             DataKey::InvestorClaimNotBefore(addr.clone()),
             DataKey::InvestorClaimed(addr.clone()),
+            DataKey::InvestorRefunded(addr.clone()),
             DataKey::InvestorAllowlisted(addr),
         ];
         for k in keys.iter() {
@@ -974,6 +975,8 @@ pub enum EscrowError {
     /// This bounds the worst-case release instruction budget that scales with participant
     /// count when `max_unique_investors` was not configured at init.
     UniqueInvestorHardCapReached = 249,
+    /// [`StarfundEscrow::unfund`] received a non-positive withdrawal amount.
+    UnfundAmountNotPositive = 250,
 }
 
 #[inline(always)]
@@ -3124,14 +3127,46 @@ impl StarfundEscrow {
 
         let max_horizon = maturity_max_horizon.unwrap_or(DEFAULT_MATURITY_MAX_HORIZON_SECS);
         validate_maturity_bounds(&env, maturity, max_horizon);
+
+        if let Some(deadline) = funding_deadline {
+            let now = env.ledger().timestamp();
+            ensure(&env, deadline > now, EscrowError::FundingDeadlinePassed);
+            if maturity > 0 {
+                ensure(
+                    &env,
+                    deadline < maturity,
+                    EscrowError::FundingDeadlineAtOrAfterMaturity,
+                );
+            }
+        }
+
+        if let Some(mc) = min_contribution {
+            ensure(&env, mc > 0, EscrowError::MinContributionNotPositive);
+            ensure(
+                &env,
+                mc <= amount,
+                EscrowError::MinContributionExceedsAmount,
+            );
+        }
+
+        if let Some(cap) = max_per_investor {
+            ensure(&env, cap > 0, EscrowError::MaxPerInvestorNotPositive);
+        }
+
+        if let Some(cap) = max_unique_investors {
+            ensure(&env, cap > 0, EscrowError::MaxUniqueInvestorsNotPositive);
+        }
+
+        let invoice_sym = validate_invoice_id_string(&env, &invoice_id);
+
         env.storage()
             .instance()
             .set(&DataKey::MaturityMaxHorizon, &max_horizon);
 
-        if let Some(deadline) = &funding_deadline {
+        if let Some(deadline) = funding_deadline {
             env.storage()
                 .instance()
-                .set(&DataKey::FundingDeadline, deadline);
+                .set(&keys::funding_deadline(), &deadline);
         }
 
         env.storage()
@@ -3155,17 +3190,11 @@ impl StarfundEscrow {
         }
 
         if let Some(tiers) = &yield_tiers {
-            env.storage()
-                .instance()
-                .set(&DataKey::YieldTierTable, tiers);
-        }
-        if let Some(mc) = min_contribution {
-            ensure(&env, mc > 0, EscrowError::MinContributionNotPositive);
-            ensure(
-                &env,
-                mc <= amount,
-                EscrowError::MinContributionExceedsAmount,
-            );
+            if !tiers.is_empty() {
+                env.storage()
+                    .instance()
+                    .set(&DataKey::YieldTierTable, tiers);
+            }
         }
 
         let floor = min_contribution.unwrap_or(0);
@@ -3181,14 +3210,12 @@ impl StarfundEscrow {
             .set(&keys::unique_funder_count(), &0u32);
 
         if let Some(cap) = max_per_investor {
-            ensure(&env, cap > 0, EscrowError::MaxPerInvestorNotPositive);
             env.storage()
                 .instance()
                 .set(&keys::max_per_investor_cap(), &cap);
         }
 
         if let Some(cap) = max_unique_investors {
-            ensure(&env, cap > 0, EscrowError::MaxUniqueInvestorsNotPositive);
             env.storage()
                 .instance()
                 .set(&keys::max_unique_investors_cap(), &cap);
@@ -3207,23 +3234,6 @@ impl StarfundEscrow {
                 .set(&DataKey::AllowlistActive, &active);
         }
 
-        if let Some(deadline) = funding_deadline {
-            let now = env.ledger().timestamp();
-            ensure(&env, deadline > now, EscrowError::FundingDeadlinePassed);
-            if maturity > 0 {
-                ensure(
-                    &env,
-                    deadline < maturity,
-                    EscrowError::FundingDeadlineBeyondMaturity,
-                );
-            }
-            env.storage()
-                .instance()
-                .set(&keys::funding_deadline(), &deadline);
-        }
-
-        let invoice_sym = validate_invoice_id_string(&env, &invoice_id);
-
         // The payer is set to the admin at initialization. It can be rotated later
         // via rotate_payer (admin + payer dual auth).
         let escrow = InvoiceEscrow {
@@ -3241,59 +3251,6 @@ impl StarfundEscrow {
         };
 
         env.storage().instance().set(&DataKey::Escrow, &escrow);
-
-        // Persist schema version and initial configuration keys.
-        env.storage()
-            .instance()
-            .set(&DataKey::Version, &SCHEMA_VERSION);
-        env.storage()
-            .instance()
-            .set(&DataKey::FundingToken, &funding_token);
-        env.storage().instance().set(&DataKey::Treasury, &treasury);
-
-        let floor = min_contribution.unwrap_or(0);
-        env.storage()
-            .instance()
-            .set(&DataKey::MinContributionFloor, &floor);
-
-        env.storage()
-            .instance()
-            .set(&DataKey::UniqueFunderCount, &0u32);
-
-        if let Some(registry) = registry {
-            env.storage()
-                .instance()
-                .set(&DataKey::RegistryRef, &registry);
-        }
-
-        if let Some(cap) = max_per_investor {
-            ensure(&env, cap > 0, EscrowError::MaxPerInvestorNotPositive);
-            env.storage()
-                .instance()
-                .set(&DataKey::MaxPerInvestorCap, &cap);
-        }
-
-        if let Some(cap) = max_unique_investors {
-            ensure(&env, cap > 0, EscrowError::MaxUniqueInvestorsNotPositive);
-            env.storage()
-                .instance()
-                .set(&DataKey::MaxUniqueInvestorsCap, &cap);
-        }
-
-        let delay = legal_hold_clear_delay.unwrap_or(0);
-        if delay > 0 {
-            env.storage()
-                .instance()
-                .set(&DataKey::LegalHoldClearDelay, &delay);
-        }
-
-        if let Some(tiers) = yield_tiers {
-            if !tiers.is_empty() {
-                env.storage()
-                    .instance()
-                    .set(&DataKey::YieldTierTable, &tiers);
-            }
-        }
 
         let has_maturity_lock = maturity != 0;
         EscrowInitialized {
@@ -7816,6 +7773,11 @@ impl StarfundEscrow {
                 ttl,
                 ttl,
             );
+            env.storage().persistent().extend_ttl(
+                &DataKey::InvestorRefunded(addr.clone()),
+                ttl,
+                ttl,
+            );
         }
     }
 
@@ -8165,7 +8127,7 @@ impl StarfundEscrow {
         // Zero out contribution before transfer (checks-effects-interactions).
         Self::set_persistent_investor_contribution(env, investor.clone(), 0i128);
         env.storage()
-            .instance()
+            .persistent()
             .set(&DataKey::InvestorRefunded(investor.clone()), &true);
 
         // Track distributed principal so sweep_terminal_dust can enforce the liability floor.
@@ -8239,7 +8201,7 @@ impl StarfundEscrow {
             // Skip already-refunded entries without failing.
             if env
                 .storage()
-                .instance()
+                .persistent()
                 .get(&DataKey::InvestorRefunded(investor.clone()))
                 .unwrap_or(false)
             {
@@ -8270,11 +8232,14 @@ impl StarfundEscrow {
     /// # Errors
     /// - [`EscrowError::UnfundEscrowNotOpen`] if `status != 0`.
     /// - [`EscrowError::UnfundLegalHoldActive`] if a compliance hold is currently active.
+    /// - [`EscrowError::UnfundAmountNotPositive`] if `amount <= 0`.
     /// - [`EscrowError::OverWithdrawal`] if `amount` exceeds the investor's contribution.
     ///
     /// # Events
     /// Emits [`EscrowUnfunded`] on success.
     pub fn unfund(env: Env, investor: Address, amount: i128) -> InvoiceEscrow {
+        ensure(&env, amount > 0, EscrowError::UnfundAmountNotPositive);
+
         // 1. Status guard (read-only; checked before auth to fail fast).
         let mut escrow = Self::get_escrow(env.clone());
         ensure(&env, escrow.status == 0, EscrowError::UnfundEscrowNotOpen);
@@ -8299,13 +8264,6 @@ impl StarfundEscrow {
         let remaining_contribution = contribution
             .checked_sub(amount)
             .unwrap_or_else(|| fail(&env, EscrowError::OverWithdrawal));
-
-        // Guard: amount must be > 0 (a zero amount would pass checked_sub but is nonsensical).
-        // checked_sub on a negative amount would yield a value > contribution ΓÇö still caught
-        // above ΓÇö but a zero withdrawal is explicitly rejected here for clarity.
-        if amount <= 0 {
-            fail(&env, EscrowError::OverWithdrawal);
-        }
 
         // 5. funded_amount decrement.
         let new_funded_amount = escrow
@@ -8362,7 +8320,7 @@ impl StarfundEscrow {
     /// Whether an investor has already received a refund in a cancelled escrow.
     pub fn is_investor_refunded(env: Env, investor: Address) -> bool {
         env.storage()
-            .instance()
+            .persistent()
             .get(&DataKey::InvestorRefunded(investor))
             .unwrap_or(false)
     }
