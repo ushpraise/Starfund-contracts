@@ -47,9 +47,47 @@ fn release_during_dispute_is_blocked() {
     let (env, client, admin, _) = funded_client();
     client.open_dispute(&admin);
     assert!(client.is_dispute_active());
+    assert!(client.get_escrow().dispute_active);
 
     let result = client.try_withdraw();
     assert_contract_error(result, EscrowError::DisputeBlocksWithdrawal);
+}
+
+#[test]
+fn close_during_dispute_is_blocked() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, sme) = setup(&env);
+    client.init(
+        &admin,
+        &String::from_str(&env, "CLOSE-DISPUTE"),
+        &sme,
+        &1000i128,
+        &100i64,
+        &0u64,
+        &Address::generate(&env),
+        &None,
+        &Address::generate(&env),
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None::<i64>,
+        &None::<u32>,
+    );
+    client.open_dispute(&admin);
+
+    let result = client.try_close_escrow();
+    match result {
+        Err(Err(InvokeError::Contract(code))) => {
+            assert_eq!(code, crate::CloseError::ActiveDispute as u32);
+        }
+        other => panic!("expected active dispute error, got {other:?}"),
+    }
 }
 
 #[test]
@@ -69,6 +107,20 @@ fn dispute_resolved_then_release_succeeds() {
     let released = client.withdraw();
     assert_eq!(released.status, 3);
     assert!(!client.is_dispute_active());
+}
+
+#[test]
+fn rejected_dispute_resolution_is_explicit_and_non_mutating() {
+    let (_, client, admin, _) = funded_client();
+    client.open_dispute(&admin);
+    let before = client.get_dispute_record().unwrap();
+
+    let result = client.try_close_dispute(&admin, &false);
+    assert_contract_error(result, EscrowError::DisputeResolutionRejected);
+
+    assert!(client.is_dispute_active());
+    assert_eq!(client.get_escrow().dispute_active, true);
+    assert_eq!(client.get_dispute_record().unwrap(), before);
 }
 
 #[test]

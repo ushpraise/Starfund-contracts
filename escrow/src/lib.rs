@@ -206,19 +206,22 @@ pub const MAX_ATTESTATION_REVOKE_BATCH: u32 = 32;
 pub const MAX_BUMP_TTL_BATCH: u32 = 32;
 
 /// Errors specific to escrow close finalization.
+///
+/// Close errors use the reserved 500-series range because Soroban exposes all contract errors
+/// through one shared `u32` code space, even when they come from separate Rust enums.
 #[contracterror]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CloseError {
     /// The caller is not the configured admin.
-    NotAuthorized = 0,
+    NotAuthorized = 500,
     /// The escrow was not initialized.
-    NotInitialized = 1,
+    NotInitialized = 501,
     /// The escrow has already been closed.
-    AlreadyClosed = 2,
+    AlreadyClosed = 502,
     /// The escrow still holds a token balance.
-    ActiveBalance = 3,
+    ActiveBalance = 503,
     /// The escrow has an active dispute.
-    ActiveDispute = 4,
+    ActiveDispute = 504,
 }
 
 /// Metadata captured when an escrow is finalized.
@@ -282,7 +285,7 @@ impl StarfundEscrow {
             panic_with_error!(&env, CloseError::ActiveBalance);
         }
 
-        if env.storage().instance().get(&DataKey::Dispute).unwrap_or(false) {
+        if Self::is_dispute_active(env.clone()) {
             panic_with_error!(&env, CloseError::ActiveDispute);
         }
 
@@ -320,6 +323,9 @@ impl StarfundEscrow {
         escrow.admin.require_auth();
         escrow.dispute_active = active;
         env.storage().instance().set(&DataKey::Escrow, &escrow);
+        env.storage()
+            .instance()
+            .set(&DataKey::DisputeActive, &active);
         extend_ttl_for_activity(&env, &escrow, None);
     }
 }
@@ -945,6 +951,8 @@ pub enum EscrowError {
     DisputeAlreadyOpen = 246,
     /// No dispute is active for this escrow.
     DisputeNotOpen = 247,
+    /// A dispute close request must explicitly resolve the active dispute.
+    DisputeResolutionRejected = 248,
 
     /// [`StarfundEscrow::execute_callback`] called from an origin address different from the registered origin context.
     CallbackWrongOrigin = 240,
@@ -3896,10 +3904,14 @@ impl StarfundEscrow {
             resolved_at: None,
             resolved_by: None,
         };
+        let mut escrow = escrow;
+        escrow.dispute_active = true;
+        env.storage().instance().set(&DataKey::Escrow, &escrow);
         env.storage().instance().set(&DataKey::DisputeActive, &true);
         env.storage()
             .instance()
             .set(&DataKey::DisputeRecord, &record);
+        extend_ttl_for_activity(&env, &escrow, None);
     }
 
     /// Admin-only dispute resolution: close the dispute while preserving the original record.
@@ -3916,6 +3928,7 @@ impl StarfundEscrow {
             Self::is_dispute_active(env.clone()),
             EscrowError::DisputeNotOpen,
         );
+        ensure(&env, resolved, EscrowError::DisputeResolutionRejected);
 
         let mut record: DisputeRecord = env
             .storage()
@@ -3927,15 +3940,16 @@ impl StarfundEscrow {
             record.state = DisputeState::Resolved;
             record.resolved_at = Some(env.ledger().timestamp());
             record.resolved_by = Some(caller.clone());
+            let mut escrow = escrow;
+            escrow.dispute_active = false;
+            env.storage().instance().set(&DataKey::Escrow, &escrow);
             env.storage()
                 .instance()
                 .set(&DataKey::DisputeRecord, &record);
             env.storage()
                 .instance()
                 .set(&DataKey::DisputeActive, &false);
-        } else {
-            // leave dispute active if the admin chooses to keep it open; the freeze stays in force.
-            return;
+            extend_ttl_for_activity(&env, &escrow, None);
         }
     }
 
