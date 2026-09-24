@@ -188,6 +188,9 @@ starfund-contracts/
 | `propose_admin` | Admin | Step 1 of admin handover — sets `PendingAdmin` and proposal expiry. |
 | `accept_admin` | Pending Admin | Step 2 of admin handover — pending address accepts proposal before expiry. |
 | `cancel_pending_admin` | Admin | Admin withdraws an unaccepted proposal. |
+| `propose_payer_recovery` | Admin | Step 1 of emergency payer recovery — admin-only proposal when current payer key is lost/compromised. Sets `PendingPayer` and proposal expiry (default 3 days). |
+| `accept_payer_recovery` | Pending Payer | Step 2 of payer recovery — pending address accepts proposal before expiry, becoming the active payer. |
+| `cancel_pending_payer` | Admin | Admin withdraws an unaccepted payer recovery proposal. |
 | `get_escrow` | — | Read current escrow state. |
 | `get_version` | — | Read stored `DataKey::Version`. |
 | `get_collateral_version` | — | Read the collateral subsystem's schema version (`DataKey::Version`). Returns `0` before `init`. Consistent with `get_version`; named separately for integrators scoped to the collateral API. |
