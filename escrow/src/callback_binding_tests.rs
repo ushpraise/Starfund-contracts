@@ -12,7 +12,9 @@
 
 use soroban_sdk::{testutils::Address as _, Address, Env, String};
 
-use super::{CallbackContext, StarfundEscrow, StarfundEscrowClient};
+use crate::tests::assert_contract_error;
+
+use super::{CallbackContext, EscrowError, StarfundEscrow, StarfundEscrowClient};
 
 /// Deploy and initialize an escrow instance for callback testing.
 fn deploy_escrow<'a>(
@@ -113,10 +115,10 @@ fn test_callback_wrong_origin_rejected() {
     assert_eq!(nonce, 1);
 
     // Attempt callback execution with wrong origin (origin_b instead of origin_a)
-    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        client.execute_callback(&nonce, &origin_b, &phase);
-    }));
-    assert!(res.is_err(), "execution from wrong origin must fail");
+    assert_contract_error(
+        client.try_execute_callback(&nonce, &origin_b, &phase),
+        EscrowError::CallbackWrongOrigin,
+    );
 
     // Ensure state was not corrupted / consumed
     assert!(!client.is_callback_consumed(&nonce));
@@ -142,16 +144,36 @@ fn test_callback_wrong_nonce_rejected() {
     assert_eq!(nonce, 1);
 
     // Nonce that does not exist
-    let res_nonexistent = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        client.execute_callback(&999u64, &origin, &phase);
-    }));
-    assert!(
-        res_nonexistent.is_err(),
-        "execution with non-existent nonce must fail"
+    assert_contract_error(
+        client.try_execute_callback(&999u64, &origin, &phase),
+        EscrowError::CallbackNotFound,
     );
 
     // Context for nonce 1 is still intact and unconsumed
     assert!(!client.is_callback_consumed(&1));
+}
+
+#[test]
+fn test_callback_stored_nonce_mismatch_rejected() {
+    let env = Env::default();
+    let (client, _admin, _sme, id) = deploy_escrow(&env, "INV_CB_3C");
+
+    let origin = Address::generate(&env);
+    let phase = 1u32;
+    let nonce = client.register_callback(&origin, &phase);
+    let mut context = client.get_callback(&nonce).expect("callback should exist");
+    context.nonce = nonce + 1;
+
+    env.as_contract(&id, || {
+        env.storage()
+            .instance()
+            .set(&super::DataKey::CallbackContext(nonce), &context);
+    });
+
+    assert_contract_error(
+        client.try_execute_callback(&nonce, &origin, &phase),
+        EscrowError::CallbackWrongNonce,
+    );
 }
 
 #[test]
@@ -201,12 +223,9 @@ fn test_callback_replay_rejected() {
     assert!(client.is_callback_consumed(&nonce));
 
     // Second execution (replay) must fail
-    let replay_res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        client.execute_callback(&nonce, &origin, &phase);
-    }));
-    assert!(
-        replay_res.is_err(),
-        "callback replay must be rejected on second call"
+    assert_contract_error(
+        client.try_execute_callback(&nonce, &origin, &phase),
+        EscrowError::CallbackReplayed,
     );
 
     // Ensure status remains consumed
@@ -234,21 +253,15 @@ fn test_callback_after_cancellation_rejected() {
     assert_eq!(client.get_escrow().status, 4);
 
     // Attempt callback execution after cancellation
-    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        client.execute_callback(&nonce, &origin, &phase);
-    }));
-    assert!(
-        res.is_err(),
-        "callback execution after escrow cancellation must be rejected"
+    assert_contract_error(
+        client.try_execute_callback(&nonce, &origin, &phase),
+        EscrowError::CallbackAfterCancellation,
     );
 
     // Attempt registering a new callback on cancelled escrow must also fail
-    let reg_res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        client.register_callback(&origin, &phase);
-    }));
-    assert!(
-        reg_res.is_err(),
-        "registering callback on cancelled escrow must be rejected"
+    assert_contract_error(
+        client.try_register_callback(&origin, &phase),
+        EscrowError::CallbackAfterCancellation,
     );
 }
 
@@ -267,12 +280,9 @@ fn test_callback_wrong_phase_rejected() {
 
     let nonce = client.register_callback(&origin, &expected_phase);
 
-    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        client.execute_callback(&nonce, &origin, &wrong_phase);
-    }));
-    assert!(
-        res.is_err(),
-        "callback execution with wrong phase must be rejected"
+    assert_contract_error(
+        client.try_execute_callback(&nonce, &origin, &wrong_phase),
+        EscrowError::CallbackWrongPhase,
     );
 
     assert!(!client.is_callback_consumed(&nonce));

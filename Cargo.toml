@@ -2,6 +2,13 @@
 members = ["escrow"]
 resolver = "2" 
 
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+
 [workspace.metadata.cargo-llvm-cov]
 # Exclude test scaffolding from coverage measurement — only production code is gated.
 exclude = [
