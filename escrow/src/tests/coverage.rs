@@ -452,7 +452,7 @@ fn typed_error_codes_cover_range_boundaries() {
             EscrowError::TargetNotPositive,
     );
     assert_contract_error(
-        admin_client.try_propose_admin(&admin, &1u32),
+        admin_client.try_propose_admin(&admin, &0u32, &None),
             EscrowError::NewAdminSameAsCurrent,
     );
 
@@ -842,7 +842,7 @@ fn test_admin_handover_and_maturity_updates() {
     assert_eq!(updated.maturity, 200);
 
     let new_admin = Address::generate(&env);
-    let pending = client.propose_admin(&new_admin, &1u32);
+    let pending = client.propose_admin(&new_admin, &0u32, &None);
     assert_eq!(pending, new_admin);
     assert_eq!(client.get_escrow().admin, admin);
     assert_eq!(client.get_pending_admin(), Some(new_admin.clone()));
@@ -915,7 +915,7 @@ fn test_transfer_admin_same_admin() {
     &None::<i64>,
         &None::<u32>,);
 
-    client.propose_admin(&admin, &None);
+    client.propose_admin(&admin, &0u32, &None);
 }
 
 #[test]

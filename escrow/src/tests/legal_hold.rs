@@ -602,7 +602,7 @@ fn hold_persists_after_admin_handover() {
     let new_admin = Address::generate(&env);
     init_funded(&client, &env, &admin, &sme, &investor, "LHX003");
     client.set_legal_hold(&true, &0u32);
-    client.propose_admin(&new_admin, &1u32);
+    client.propose_admin(&new_admin, &0u32, &None);
     client.accept_admin();
     // Hold is still active after admin handover.
     assert!(client.get_legal_hold());
@@ -730,7 +730,7 @@ fn non_risk_operations_not_blocked_by_hold() {
 
     // Two-step admin handover must not be blocked.
     let new_admin = Address::generate(&env);
-    client.propose_admin(&new_admin, &2u32);
+    client.propose_admin(&new_admin, &0u32, &None);
     assert_eq!(client.get_pending_admin(), Some(new_admin.clone()));
     client.accept_admin();
     let escrow = client.get_escrow();
@@ -982,7 +982,7 @@ fn recovery_new_admin_clears_hold_and_operations_resume() {
 
     // --- Step 2: propose + accept new admin while hold is active. ---
     // propose_admin and accept_admin are NOT gated by the hold (by design).
-    client.propose_admin(&new_admin, &1u32);
+    client.propose_admin(&new_admin, &0u32, &None);
     assert_eq!(client.get_pending_admin(), Some(new_admin.clone()));
     client.accept_admin();
     // Hold persists after handover.
