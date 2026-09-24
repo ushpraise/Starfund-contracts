@@ -403,6 +403,9 @@ pub const MAX_SETTLE_BATCH: u32 = 50;
 /// Upper bound on [`StarfundEscrow::refund_batch`] entries to keep storage/CPU bounded.
 pub const MAX_REFUND_BATCH: u32 = 50;
 
+/// Upper bound on [`StarfundEscrow::unfund_batch`] entries to keep storage/CPU bounded.
+pub const MAX_UNFUND_BATCH: u32 = 50;
+
 /// Upper bound on [`StarfundEscrow::set_investors_allowlisted`] batch size.
 pub const MAX_INVESTOR_ALLOWLIST_BATCH: u32 = 32;
 
@@ -797,6 +800,12 @@ pub enum EscrowError {
     RefundBatchEmpty = 144,
     /// [`StarfundEscrow::refund_batch`] exceeded [`MAX_REFUND_BATCH`].
     RefundBatchTooLarge = 145,
+    /// [`StarfundEscrow::unfund_batch`] received an empty entries vector.
+    UnfundBatchEmpty = 251,
+    /// [`StarfundEscrow::unfund_batch`] exceeded [`MAX_UNFUND_BATCH`].
+    UnfundBatchTooLarge = 252,
+    /// [`StarfundEscrow::unfund_batch`] contained a duplicate investor address.
+    UnfundBatchDuplicateInvestor = 253,
 
     /// `clear_legal_hold` was called without a prior `request_legal_hold_clear`.
     LegalHoldClearRequestMissing = 150,
@@ -8359,6 +8368,37 @@ impl StarfundEscrow {
         escrow
     }
 
+    /// Batch unfund entrypoint: return principal for multiple investors in one atomic call.
+    ///
+    /// Each investor authorizes their own entry. Duplicate addresses are rejected before any
+    /// entry is processed; if any entry fails, the Soroban invocation rolls back the whole batch.
+    pub fn unfund_batch(env: Env, entries: Vec<(Address, i128)>) -> InvoiceEscrow {
+        let n = entries.len();
+
+        ensure(&env, n > 0, EscrowError::UnfundBatchEmpty);
+        ensure(&env, n <= MAX_UNFUND_BATCH, EscrowError::UnfundBatchTooLarge);
+
+        for i in 0..n {
+            let (address_i, _) = entries.get(i).unwrap();
+            for j in (i + 1)..n {
+                let (address_j, _) = entries.get(j).unwrap();
+                ensure(
+                    &env,
+                    address_i != address_j,
+                    EscrowError::UnfundBatchDuplicateInvestor,
+                );
+            }
+        }
+
+        let mut escrow = Self::get_escrow(env.clone());
+        for i in 0..n {
+            let (investor, amount) = entries.get(i).unwrap();
+            escrow = Self::unfund(env.clone(), investor, amount);
+        }
+
+        escrow
+    }
+
     /// Whether an investor has already received a refund in a cancelled escrow.
     pub fn is_investor_refunded(env: Env, investor: Address) -> bool {
         env.storage()
@@ -8375,6 +8415,14 @@ impl StarfundEscrow {
         env.storage()
             .instance()
             .get(&DataKey::DistributedPrincipal)
+            .unwrap_or(0)
+    }
+
+    /// Total principal cumulatively released to the SME.
+    pub fn get_released_amount(env: Env) -> i128 {
+        env.storage()
+            .instance()
+            .get(&keys::released_amount())
             .unwrap_or(0)
     }
 
