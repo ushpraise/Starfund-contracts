@@ -403,9 +403,6 @@ pub const MAX_SETTLE_BATCH: u32 = 50;
 /// Upper bound on [`StarfundEscrow::refund_batch`] entries to keep storage/CPU bounded.
 pub const MAX_REFUND_BATCH: u32 = 50;
 
-/// Upper bound on [`StarfundEscrow::set_investors_allowlisted`] batch size.
-pub const MAX_INVESTOR_ALLOWLIST_BATCH: u32 = 32;
-
 /// Upper bound on [`StarfundEscrow::get_contributions`] / investor read batch size.
 pub const MAX_INVESTOR_READ_BATCH: u32 = 50;
 
@@ -674,6 +671,10 @@ pub enum EscrowError {
     CollateralTimestampBackwards = 62,
     /// [`StarfundEscrow::clear_sme_collateral_commitment`] called when no pledge exists.
     NoCollateralToClear = 63,
+    /// [`StarfundEscrow::batch_record_collateral`] received an empty batch.
+    CollateralBatchEmpty = 64,
+    /// [`StarfundEscrow::batch_record_collateral`] exceeded [`MAX_COLLATERAL_BATCH`].
+    CollateralBatchTooLarge = 65,
 
     /// [`StarfundEscrow::set_investors_allowlisted`] received an empty batch.
     InvestorBatchEmpty = 70,
@@ -2164,23 +2165,6 @@ pub struct AdminProposalSuperseded {
     pub invoice_id: Symbol,
     pub previous_pending: Address,
     pub new_pending: Address,
-}
-
-/// Emitted by [`StarfundEscrow::cancel_pending_admin`] when a pending admin proposal is cancelled.
-///
-/// Indexers and operators can monitor this event to track when nominations are retracted.
-///
-/// # Fields
-/// - `name`: hardcoded `adm_can` symbol.
-/// - `invoice_id`: escrow invoice identifier.
-/// - `cancelled_pending`: the address whose pending admin nomination was revoked.
-#[contractevent]
-pub struct AdminProposalCancelled {
-    #[topic]
-    pub name: Symbol,
-    #[topic]
-    pub invoice_id: Symbol,
-    pub cancelled_pending: Address,
 }
 
 /// Emitted by [`StarfundEscrow::recover_admin`] when the current admin clears an
@@ -6900,16 +6884,15 @@ impl StarfundEscrow {
     pub fn release(env: Env, amount: i128) -> InvoiceEscrow {
         ensure(&env, amount > 0, EscrowError::ReleaseAmountNotPositive);
 
-        ensure(
-            &env,
-            !Self::paused_active(&env),
-            EscrowError::PausedBlocksRelease,
-        );
         guard_not_paused(&env, EscrowError::PausedBlocksRelease);
         guard_not_legal_hold(&env, EscrowError::LegalHoldBlocksRelease);
 
         // Load escrow, but require admin authorization.
-        let escrow: InvoiceEscrow = env.storage().instance().get(&DataKey::Escrow).unwrap();
+        let escrow: InvoiceEscrow = env
+            .storage()
+            .instance()
+            .get(&DataKey::Escrow)
+            .unwrap_or_else(|| fail(&env, EscrowError::EscrowNotInitialized));
         escrow.admin.require_auth();
 
         guard_status_eq(&env, escrow.status, 1, EscrowError::ReleaseNotFunded);
@@ -6920,7 +6903,10 @@ impl StarfundEscrow {
             .get(&keys::released_amount())
             .unwrap_or(0);
 
-        let remaining = escrow.funded_amount.checked_sub(released_amount).unwrap();
+        let remaining = escrow
+            .funded_amount
+            .checked_sub(released_amount)
+            .unwrap_or_else(|| fail(&env, EscrowError::ReleaseExceedsRemaining));
         ensure(
             &env,
             amount <= remaining,
@@ -6930,7 +6916,9 @@ impl StarfundEscrow {
         let mut next_escrow = escrow.clone();
         let is_final = amount == remaining;
 
-        let new_released = released_amount.checked_add(amount).unwrap();
+        let new_released = released_amount
+            .checked_add(amount)
+            .unwrap_or_else(|| fail(&env, EscrowError::FundedAmountOverflow));
         env.storage()
             .instance()
             .set(&keys::released_amount(), &new_released);
