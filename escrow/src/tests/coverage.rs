@@ -237,10 +237,10 @@ fn escrow_error_discriminants_match_canonical_table() {
         (EscrowError::RotationNotOpen, 161),
         (EscrowError::NewSmeSameAsCurrent, 162),
         (EscrowError::FundingDeadlinePassed, 164),
-        (EscrowError::NoPendingAdmin, 172),
-        (EscrowError::FloorLowerNotOpen, 173),
-        (EscrowError::NewFloorNotLower, 174),
-        (EscrowError::NewFloorNotPositive, 175),
+        (EscrowError::NoPendingAdmin, 250),
+        (EscrowError::FloorLowerNotOpen, 269),
+        (EscrowError::NewFloorNotLower, 262),
+        (EscrowError::NewFloorNotPositive, 261),
     ];
     assert_eq!(TABLE.len(), 89);
     for (variant, code) in TABLE {
