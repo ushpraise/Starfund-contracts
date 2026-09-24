@@ -5675,6 +5675,7 @@ impl StarfundEscrow {
     pub fn set_investor_allowlisted(env: Env, investor: Address, allowed: bool, expected_nonce: u32) {
         let escrow = Self::load_escrow_require_admin(&env);
         Self::consume_admin_nonce(&env, expected_nonce);
+        let was_allowlisted = Self::is_investor_allowlisted(env.clone(), investor.clone());
         env.storage()
             .persistent()
             .set(&DataKey::InvestorAllowlisted(investor.clone()), &allowed);
@@ -6539,10 +6540,10 @@ impl StarfundEscrow {
             }
         } else {
             ensure(&env, prev == 0, EscrowError::TieredSecondDeposit);
-            let (eff, lock) =
+            let resolution =
                 Self::effective_yield_for_commitment(&env, escrow.yield_bps, committed_lock_secs);
-            investor_effective_yield_bps = eff;
-            tier_lock_secs = lock;
+            investor_effective_yield_bps = resolution.effective_yield_bps;
+            tier_lock_secs = resolution.matched_lock_secs;
             let now = env.ledger().timestamp();
             claim_nb = if committed_lock_secs == 0 {
                 0u64
@@ -6617,7 +6618,10 @@ impl StarfundEscrow {
                 investor_effective_yield_bps,
             );
             Self::set_persistent_investor_claim_not_before(&env, investor.clone(), claim_nb);
-            res
+            YieldResolution {
+                effective_yield_bps: investor_effective_yield_bps,
+                matched_lock_secs: tier_lock_secs,
+            }
         };
         let investor_effective_yield_bps = resolution.effective_yield_bps;
         let tier_lock_secs = resolution.matched_lock_secs;
@@ -7883,8 +7887,10 @@ impl StarfundEscrow {
             .publish(&env);
         }
 
-        let window = validity_window_secs.unwrap_or(DEFAULT_ADMIN_PROPOSAL_VALIDITY_SECS);
-        let expiry = env.ledger().timestamp().saturating_add(window);
+        let expiry = env
+            .ledger()
+            .timestamp()
+            .saturating_add(DEFAULT_ADMIN_PROPOSAL_VALIDITY_SECS);
 
         env.storage()
             .instance()
@@ -7986,7 +7992,7 @@ impl StarfundEscrow {
 
         DeprecatedTransferAdminUsed {
             name: symbol_short!("depr_xfer"),
-            invoice_id,
+            invoice_id: escrow.invoice_id.clone(),
             proposed_address: new_admin,
         }
         .publish(&env);
