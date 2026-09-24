@@ -2457,6 +2457,7 @@ pub struct TreasuryDustSwept {
     pub recipient: Address,
     pub token: Address,
     pub amount: i128,
+    pub remaining_balance: i128,
 }
 
 #[contractevent]
@@ -3533,8 +3534,18 @@ impl StarfundEscrow {
             &treasury,
             sweep_amt,
         );
-        escrow.status = 2;
-        env.storage().instance().set(&DataKey::Escrow, &escrow);
+
+        let remaining_balance = balance - sweep_amt;
+        TreasuryDustSwept {
+            name: symbol_short!("dust_sw"),
+            invoice_id: escrow.invoice_id.clone(),
+            recipient: treasury.clone(),
+            token: token_addr.clone(),
+            amount: sweep_amt,
+            remaining_balance,
+        }
+        .publish(&env);
+
         sweep_amt
     }
 
@@ -3686,7 +3697,7 @@ impl StarfundEscrow {
     /// | Legal hold active | [`EscrowError::LegalHoldBlocksPayerRotation`] |
     /// | Escrow not open or funded | [`EscrowError::PayerRotationNotOpen`] |
     /// | `new_payer == current payer` | [`EscrowError::NewPayerSameAsCurrent`] |
-    pub fn rotate_payer(env: Env, new_payer: Address) -> InvoiceEscrow {
+    pub fn rotate_payer(env: Env, new_payer: Address, expected_nonce: u32) -> InvoiceEscrow {
         Self::guard_not_legal_hold(&env, EscrowError::LegalHoldBlocksPayerRotation);
 
         let mut escrow = Self::get_escrow(env.clone());
@@ -3705,6 +3716,7 @@ impl StarfundEscrow {
 
         escrow.payer.require_auth();
         escrow.admin.require_auth();
+        Self::consume_admin_nonce(&env, expected_nonce);
 
         let prior_payer = escrow.payer.clone();
         escrow.payer = new_payer.clone();
@@ -6822,9 +6834,19 @@ impl StarfundEscrow {
             .checked_add(coupon)
             .unwrap_or_else(|| fail(&env, EscrowError::ComputePayoutArithmeticOverflow));
 
+        let token_addr: Address = Self::funding_token_or_fail(&env);
+        let this = env.current_contract_address();
+        let contract_balance = TokenClient::new(&env, &token_addr).balance(&this);
+        ensure(
+            &env,
+            contract_balance >= settle_pool,
+            EscrowError::InsufficientContractBalance,
+        );
+
         escrow.status = 2;
 
         env.storage().instance().set(&DataKey::Escrow, &escrow);
+        env.storage().instance().set(&DataKey::SettledAt, &now);
 
         // Extend TTL based on lifecycle after settlement
         extend_ttl_for_activity(&env, &escrow, None);

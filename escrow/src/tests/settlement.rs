@@ -1712,6 +1712,46 @@ fn settled_at_recorded_at_settle() {
     );
 }
 
+#[test]
+#[should_panic]
+fn settle_rejects_insufficient_contract_balance() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, sme) = setup(&env);
+    let investor = Address::generate(&env);
+    let token = install_stellar_asset_token(&env);
+    let treasury = Address::generate(&env);
+
+    client.init(
+        &admin,
+        &soroban_sdk::String::from_str(&env, "INSUFFICIENT"),
+        &sme,
+        &TARGET,
+        &500i64,
+        &0u64,
+        &token.id,
+        &None,
+        &treasury,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None::<i64>,
+        &None::<u32>,
+    );
+
+    token.stellar.mint(&investor, &TARGET);
+    client.fund(&investor, &TARGET);
+
+    // Contract balance equals funded_amount, but settlement requires principal + coupon.
+    // If the borrower has not yet deposited the settlement pool, `settle` must fail.
+    client.settle();
+}
+
 /// `get_settled_at` value is stable — subsequent reads return the same timestamp.
 #[test]
 fn settled_at_is_stable_after_settle() {

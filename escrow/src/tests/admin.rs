@@ -2537,6 +2537,31 @@ fn auth_audit_rotate_beneficiary_requires_auth() {
 }
 
 #[test]
+fn test_rotate_payer_success_dual_auth() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, sme) = setup(&env);
+    let new_payer = Address::generate(&env);
+    default_init(&client, &env, &admin, &sme);
+
+    let updated = client.rotate_payer(&new_payer, &0u32);
+    assert_eq!(updated.payer, new_payer);
+    assert_eq!(client.get_escrow().payer, new_payer);
+}
+
+#[test]
+#[should_panic]
+fn test_rotate_payer_nonce_mismatch_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, sme) = setup(&env);
+    let new_payer = Address::generate(&env);
+    default_init(&client, &env, &admin, &sme);
+
+    client.rotate_payer(&new_payer, &1u32);
+}
+
+#[test]
 #[should_panic]
 fn auth_audit_revoke_attestation_digest_requires_admin() {
     let env = Env::default();

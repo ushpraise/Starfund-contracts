@@ -916,9 +916,32 @@ fn sweep_terminal_dust_emits_treasury_dust_swept_event() {
             recipient: treasury,
             token: token.id,
             amount: dust,
+            remaining_balance: 0i128,
         }
         .to_xdr(&env, &contract_id)
     );
+}
+
+#[test]
+fn sweep_terminal_dust_keeps_cancelled_status_and_preserves_refund_path() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, sme) = setup(&env);
+    let investor = Address::generate(&env);
+    let fund_amount = 1_000i128;
+    let dust = 7i128;
+    let (token, _treasury) =
+        setup_cancelled_with_token(&env, &client, &admin, &sme, &investor, fund_amount);
+
+    token.stellar.mint(&client.address, &dust);
+    assert_eq!(client.get_escrow().status, 4);
+
+    let swept = client.sweep_terminal_dust(&dust);
+    assert_eq!(swept, dust);
+    assert_eq!(client.get_escrow().status, 4);
+
+    client.refund(&investor);
+    assert_eq!(client.get_distributed_principal(), fund_amount);
 }
 
 #[test]
