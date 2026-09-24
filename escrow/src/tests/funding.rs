@@ -7212,6 +7212,51 @@ fn test_unfund_full() {
 }
 
 #[test]
+fn test_unfund_full_removes_investor_index_and_allows_clean_refund() {
+    let env = Env::default();
+    let (client, admin, sme) = setup(&env);
+    let investor = Address::generate(&env);
+    let (tok, tre) = free_addresses(&env);
+    client.init(
+        &admin,
+        &String::from_str(&env, "UF003"),
+        &sme,
+        &TARGET,
+        &800i64,
+        &0u64,
+        &tok,
+        &None,
+        &tre,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None::<i64>,
+        &None::<u32>,
+    );
+
+    client.fund(&investor, &(TARGET / 4));
+    assert_eq!(client.get_investors(&0, &10).len(), 1);
+    assert_eq!(client.get_unique_funder_count(), 1);
+
+    client.unfund(&investor, &(TARGET / 4));
+    assert_eq!(client.get_contribution(&investor), 0);
+    assert_eq!(client.get_investors(&0, &10).len(), 0);
+    assert_eq!(client.get_unique_funder_count(), 0);
+    assert_eq!(client.get_investor_claim_not_before(&investor), 0);
+    assert_eq!(client.get_investor_yield_bps(&investor), 800i64);
+
+    client.fund(&investor, &(TARGET / 8));
+    assert_eq!(client.get_unique_funder_count(), 1);
+    assert_eq!(client.get_investors(&0, &10).len(), 1);
+    assert_eq!(client.get_investors(&0, &10).get(0).unwrap(), investor);
+}
+
+#[test]
 fn test_unfund_funder_count_floor() {
     // Inject UniqueFunderCount=0 manually and verify saturating_sub does not underflow.
     let env = Env::default();

@@ -474,13 +474,14 @@ pub const DEFAULT_ADMIN_PROPOSAL_VALIDITY_SECS: u64 = 604_800; // 7 days
 
 /// Minimum instance storage TTL extension horizon for time-sensitive escrow entries.
 ///
-/// `bump_ttl` extends instance-storage entries to avoid rent/archival edge cases when
-/// maturity/claim locks are far in the future.
+/// Stellar ledgers close at roughly 5 seconds each, so the previous "1 second/ledger" estimate
+/// was off by a factor of 5. The current minimum is set to one hour of ledgers: 60 minutes ×
+/// 12 ledgers/minute = 720 ledgers.
 ///
 /// Named as a constant so operators can reason about and audit the threshold.
 /// Also the **default** for [`StarfundEscrow::get_storage_limit`] when
-/// [`DataKey::StorageLimit`] is unset ΓÇö preserving pre-configurable behaviour.
-pub const INSTANCE_TTL_MIN_EXTENSION_LEDGERS: u32 = 60 * 60; // Approx. 1h at 1 ledger/sec.
+/// [`DataKey::StorageLimit`] is unset — preserving pre-configurable behaviour.
+pub const INSTANCE_TTL_MIN_EXTENSION_LEDGERS: u32 = 60 * 12; // 1h at ~5s/ledger.
 
 /// Minimum persistent storage TTL extension horizon for per-investor allowlist entries.
 ///
@@ -489,11 +490,15 @@ pub const INSTANCE_TTL_MIN_EXTENSION_LEDGERS: u32 = 60 * 60; // Approx. 1h at 1 
 ///
 /// When [`DataKey::StorageLimit`] is unset, persistent extensions also fall back to
 /// [`INSTANCE_TTL_MIN_EXTENSION_LEDGERS`] (equal to this constant today).
-pub const PERSISTENT_TTL_MIN_EXTENSION_LEDGERS: u32 = 60 * 60; // Approx. 1h at 1 ledger/sec.
+pub const PERSISTENT_TTL_MIN_EXTENSION_LEDGERS: u32 = 60 * 12; // 1h at ~5s/ledger.
 
-pub const TTL_ACTIVE_ESCROW_LEDGERS: u32 = 90 * 24 * 60 * 60;
-pub const TTL_DISPUTED_ESCROW_LEDGERS: u32 = 180 * 24 * 60 * 60;
-pub const TTL_TERMINAL_ESCROW_LEDGERS: u32 = 30 * 24 * 60 * 60;
+/// 90 days at ~5s/ledger = 90 × 24 × 60 × 12 = 1,555,200 ledgers.
+pub const TTL_ACTIVE_ESCROW_LEDGERS: u32 = 90 * 24 * 60 * 12;
+/// 180 days at ~5s/ledger = 180 × 24 × 60 × 12 = 3,110,400 ledgers, matching Soroban's
+/// protocol max entry TTL. This is the upper bound that host code will accept without failing.
+pub const TTL_DISPUTED_ESCROW_LEDGERS: u32 = 180 * 24 * 60 * 12;
+/// 30 days at ~5s/ledger = 30 × 24 × 60 × 12 = 518,400 ledgers.
+pub const TTL_TERMINAL_ESCROW_LEDGERS: u32 = 30 * 24 * 60 * 12;
 
 pub(crate) fn get_lifecycle_ttl(escrow: &InvoiceEscrow) -> u32 {
     if escrow.dispute_active {
@@ -4209,6 +4214,39 @@ impl StarfundEscrow {
             .set(&keys::investor_claim_not_before(investor), &value);
     }
 
+    fn remove_investor_from_index(env: &Env, investor: &Address) -> bool {
+        let mut index: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&keys::investor_index())
+            .unwrap_or_else(|| Vec::new(&env));
+
+        let mut i = 0u32;
+        let mut removed = false;
+        while i < index.len() {
+            if index.get(i).unwrap() == *investor {
+                index.remove(i);
+                removed = true;
+            } else {
+                i += 1;
+            }
+        }
+
+        env.storage()
+            .instance()
+            .set(&keys::investor_index(), &index);
+        removed
+    }
+
+    fn clear_persistent_investor_tier_state(env: &Env, investor: Address) {
+        env.storage()
+            .persistent()
+            .remove(&keys::investor_effective_yield(investor.clone()));
+        env.storage()
+            .persistent()
+            .remove(&keys::investor_claim_not_before(investor.clone()));
+    }
+
     fn get_persistent_investor_claimed(env: &Env, investor: Address) -> bool {
         env.storage()
             .persistent()
@@ -6649,10 +6687,13 @@ impl StarfundEscrow {
         Self::set_persistent_investor_contribution(&env, investor.clone(), new_contribution);
 
         if prev == 0 {
-            env.storage().instance().set(
-                &DataKey::UniqueFunderCount,
-                &cur_funder_count.saturating_add(1),
-            );
+            let already_present = Self::remove_investor_from_index(&env, &investor);
+            if !already_present {
+                env.storage().instance().set(
+                    &DataKey::UniqueFunderCount,
+                    &cur_funder_count.saturating_add(1),
+                );
+            }
 
             let mut index: Vec<Address> = env
                 .storage()
@@ -7776,46 +7817,43 @@ impl StarfundEscrow {
         let escrow = Self::get_escrow(env.clone());
         let ttl = get_lifecycle_ttl(&escrow);
 
-        // Extend persistent TTL for allowlisted investor entries.
-        for addr in allowlisted.iter() {
-            // Persistent allowlist entry.
-            env.storage().persistent().extend_ttl(
-                &DataKey::InvestorAllowlisted(addr.clone()),
-                ttl,
-                ttl,
-            );
-            // Instance keys that may be perΓÇæinvestor (contribution & claim lock).
-            env.storage().instance().extend_ttl(ttl, ttl);
-        }
-
-        // Instance storage TTL is contract-wide under Soroban SDK 25. The call above covers
-        // Escrow, Version, LegalHold, snapshots, caps, and other instance keys.
+        // Instance storage TTL is contract-wide under Soroban SDK 25, so extend it once per
+        // call instead of once per investor. This covers Escrow, Version, LegalHold, snapshots,
+        // caps, and the rest of the contract-wide instance keys.
+        env.storage().instance().extend_ttl(ttl, ttl);
 
         // Persistent per-investor keys and allowlist entries (independent TTL per address).
+        // Guard every key with `has()` because Soroban panics if `extend_ttl` is called for a
+        // persistent key that has not been written yet.
         for addr in allowlisted.iter() {
-            let k = DataKey::InvestorAllowlisted(addr.clone());
-            env.storage().persistent().extend_ttl(&k, ttl, ttl);
-            // Extend persistent TTL for per-investor persistent keys used by this contract.
-            env.storage().persistent().extend_ttl(
-                &DataKey::InvestorContribution(addr.clone()),
-                ttl,
-                ttl,
-            );
-            env.storage().persistent().extend_ttl(
-                &DataKey::InvestorEffectiveYield(addr.clone()),
-                ttl,
-                ttl,
-            );
-            env.storage().persistent().extend_ttl(
-                &DataKey::InvestorClaimNotBefore(addr.clone()),
-                ttl,
-                ttl,
-            );
-            env.storage().persistent().extend_ttl(
-                &DataKey::InvestorClaimed(addr.clone()),
-                ttl,
-                ttl,
-            );
+            let allowlist_key = DataKey::InvestorAllowlisted(addr.clone());
+            if env.storage().persistent().has(&allowlist_key) {
+                env.storage().persistent().extend_ttl(&allowlist_key, ttl, ttl);
+            }
+
+            let contribution_key = DataKey::InvestorContribution(addr.clone());
+            if env.storage().persistent().has(&contribution_key) {
+                env.storage().persistent().extend_ttl(&contribution_key, ttl, ttl);
+            }
+
+            let effective_yield_key = DataKey::InvestorEffectiveYield(addr.clone());
+            if env.storage().persistent().has(&effective_yield_key) {
+                env.storage()
+                    .persistent()
+                    .extend_ttl(&effective_yield_key, ttl, ttl);
+            }
+
+            let claim_not_before_key = DataKey::InvestorClaimNotBefore(addr.clone());
+            if env.storage().persistent().has(&claim_not_before_key) {
+                env.storage()
+                    .persistent()
+                    .extend_ttl(&claim_not_before_key, ttl, ttl);
+            }
+
+            let claimed_key = DataKey::InvestorClaimed(addr.clone());
+            if env.storage().persistent().has(&claimed_key) {
+                env.storage().persistent().extend_ttl(&claimed_key, ttl, ttl);
+            }
         }
     }
 
@@ -7833,15 +7871,15 @@ impl StarfundEscrow {
     ///
     /// - **Per-investor persistent keys** (`InvestorContribution`, `InvestorEffectiveYield`,
     ///   `InvestorClaimNotBefore`, `InvestorClaimed`, `InvestorAllowlisted`):
-    ///   `env.storage().persistent().extend_ttl(&key, ΓÇª)` is called **only when the key
+    ///   `env.storage().persistent().extend_ttl(&key, …)` is called **only when the key
     ///   already exists** in persistent storage (guarded by `has()` before the call).
-    ///   Absent keys are silently skipped ΓÇö an investor who has been allowlisted but not
+    ///   Absent keys are silently skipped — an investor who has been allowlisted but not
     ///   yet funded will not have `InvestorContribution` written; requesting it is a no-op
     ///   rather than an error.
     /// - **All other keys** (instance storage): a single
-    ///   `env.storage().instance().extend_ttl(ΓÇª)` is issued. Because instance-storage TTL
-    ///   is contract-wide under the Soroban SDK, any non-persistent key in `keys` triggers
-    ///   the same net effect. Repeating the call within a batch is harmless.
+    ///   `env.storage().instance().extend_ttl(…)` is issued when the key exists. Because
+    ///   instance-storage TTL is contract-wide under the Soroban SDK, any non-persistent key
+    ///   in `keys` triggers the same net effect. Repeating the call within a batch is harmless.
     ///
     /// No funds move; no escrow status changes. This is a pure storage-maintenance
     /// operation.
@@ -7854,8 +7892,45 @@ impl StarfundEscrow {
     /// induce unexpected compute costs on operator-controlled escrows.
     ///
     /// # Errors
-    /// Emits typed [`EscrowError`] codes when the escrow is uninitialized or `new_admin` is the
-    /// current admin.
+    /// - [`EscrowError::BumpTtlBatchEmpty`] when `keys` is empty.
+    /// - [`EscrowError::BumpTtlBatchTooLarge`] when `keys.len() > MAX_BUMP_TTL_BATCH`.
+    /// - [`EscrowError::EscrowUninitialized`] when the escrow has not yet been initialized.
+    pub fn batch_bump_ttl(env: Env, keys: Vec<DataKey>) {
+        let len = keys.len();
+        ensure(&env, len > 0, EscrowError::BumpTtlBatchEmpty);
+        ensure(
+            &env,
+            len <= MAX_BUMP_TTL_BATCH,
+            EscrowError::BumpTtlBatchTooLarge,
+        );
+
+        let _escrow = Self::load_escrow_require_admin(&env);
+        let escrow = Self::get_escrow(env.clone());
+        let ttl = get_lifecycle_ttl(&escrow);
+
+        for key in keys.iter() {
+            if env.storage().instance().has(&key) {
+                env.storage().instance().extend_ttl(ttl, ttl);
+                continue;
+            }
+            if env.storage().persistent().has(&key) {
+                env.storage().persistent().extend_ttl(&key, ttl, ttl);
+            }
+        }
+    }
+
+    /// Propose a new admin address for the escrow.
+    ///
+    /// The proposed successor is stored in [`DataKey::PendingAdmin`] and must then be accepted
+    /// by calling [`StarfundEscrow::accept_admin`]. This creates a two-step admin handover so the
+    /// current admin can nominate a replacement without immediately transferring authority.
+    ///
+    /// # Authorization
+    /// Requires the current [`InvoiceEscrow::admin`] to authorize the call.
+    ///
+    /// # Errors
+    /// Emits typed [`EscrowError`] codes when the escrow is uninitialized, the replacement is the
+    /// same as the current admin, or the proposed address matches a still-pending proposal.
     pub fn propose_admin(env: Env, new_admin: Address, expected_nonce: u32) -> Address {
         let escrow = Self::load_escrow_require_admin(&env);
         Self::consume_admin_nonce(&env, expected_nonce);
@@ -8316,7 +8391,10 @@ impl StarfundEscrow {
         // 6. Effects ΓÇö update contribution (checks-effects-interactions).
         Self::set_persistent_investor_contribution(&env, investor.clone(), remaining_contribution);
 
-        // 7. Decrement UniqueFunderCount when contribution reaches zero.
+        // 7. Clear the investor registration when the contribution reaches zero.
+        // This keeps the paginated investor index and the distinct-funder count aligned,
+        // and ensures a later refund re-qualifies for the current yield tier instead of
+        // reusing stale per-investor tier state.
         if remaining_contribution == 0 {
             let cur: u32 = env
                 .storage()
@@ -8326,6 +8404,8 @@ impl StarfundEscrow {
             env.storage()
                 .instance()
                 .set(&keys::unique_funder_count(), &cur.saturating_sub(1));
+            Self::remove_investor_from_index(&env, &investor);
+            Self::clear_persistent_investor_tier_state(&env, investor.clone());
         }
 
         // 8. Persist updated escrow.
