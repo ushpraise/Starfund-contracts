@@ -44,13 +44,10 @@ impl TokenInterface for FeeOnTransferToken {
     }
     fn approve(_env: Env, _from: Address, _spender: Address, _amount: i128, _exp: u32) {}
     fn transfer_from(_env: Env, _spender: Address, _from: Address, _to: Address, _amount: i128) {
-        unimplemented!()
     }
     fn burn(_env: Env, _from: Address, _amount: i128) {
-        unimplemented!()
     }
     fn burn_from(_env: Env, _spender: Address, _from: Address, _amount: i128) {
-        unimplemented!()
     }
     fn decimals(_env: Env) -> u32 {
         7
@@ -318,13 +315,10 @@ impl TokenInterface for RebasingToken {
     }
     fn approve(_env: Env, _from: Address, _spender: Address, _amount: i128, _exp: u32) {}
     fn transfer_from(_env: Env, _spender: Address, _from: Address, _to: Address, _amount: i128) {
-        unimplemented!()
     }
     fn burn(_env: Env, _from: Address, _amount: i128) {
-        unimplemented!()
     }
     fn burn_from(_env: Env, _spender: Address, _from: Address, _amount: i128) {
-        unimplemented!()
     }
     fn decimals(_env: Env) -> u32 {
         7
@@ -409,13 +403,10 @@ impl TokenInterface for HookStealingToken {
     }
     fn approve(_env: Env, _from: Address, _spender: Address, _amount: i128, _exp: u32) {}
     fn transfer_from(_env: Env, _spender: Address, _from: Address, _to: Address, _amount: i128) {
-        unimplemented!()
     }
     fn burn(_env: Env, _from: Address, _amount: i128) {
-        unimplemented!()
     }
     fn burn_from(_env: Env, _spender: Address, _from: Address, _amount: i128) {
-        unimplemented!()
     }
     fn decimals(_env: Env) -> u32 {
         7
@@ -487,13 +478,10 @@ impl TokenInterface for LyingToken {
     }
     fn approve(_env: Env, _from: Address, _spender: Address, _amount: i128, _exp: u32) {}
     fn transfer_from(_env: Env, _spender: Address, _from: Address, _to: Address, _amount: i128) {
-        unimplemented!()
     }
     fn burn(_env: Env, _from: Address, _amount: i128) {
-        unimplemented!()
     }
     fn burn_from(_env: Env, _spender: Address, _from: Address, _amount: i128) {
-        unimplemented!()
     }
     fn decimals(_env: Env) -> u32 {
         7
