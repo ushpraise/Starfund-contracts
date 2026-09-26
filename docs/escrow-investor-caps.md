@@ -76,7 +76,7 @@ pub fn init(
 - `None` for `max_unique_investors`: No distinct-investor cap (unlimited investors)
 - `Some(n)` for `max_unique_investors`: Cap of `n` distinct investors
 - `None` for `max_per_investor`: No per-investor cap (unlimited principal per address)
-- `Some(x)` for `max_per_investor`: Immutable maximum cumulative principal per investor address
+- `Some(x)` for `max_per_investor`: Maximum cumulative principal per investor address, adjustable by an admin while the escrow is open
 - **Validation:** Both caps must be positive if configured (`> 0`)
 
 ## API Reference
@@ -90,6 +90,29 @@ Returns the configured cap, or `None` if unlimited.
 #### `get_unique_funder_count(env: Env) -> u32`
 
 Returns the current count of distinct funders.
+
+### Admin Updates
+
+#### `raise_min_contribution_floor(env: Env, new_floor: i128) -> i128`
+
+Admin-only: raises the per-deposit minimum while the escrow is open (status `0`). The new floor
+must be positive and strictly greater than the current floor. Emits `MinContributionFloorRaised`.
+
+#### `lower_min_contribution_floor(env: Env, new_floor: i128) -> i128`
+
+Admin-only: lowers the per-deposit minimum while the escrow is open (status `0`). The new floor
+must be positive and strictly less than the current floor. Emits `MinContributionFloorLowered`.
+
+#### `raise_max_per_investor(env: Env, new_cap: i128) -> i128`
+
+Admin-only: raises an already-configured per-investor cap while the escrow is open. The new cap
+must be strictly greater than the current cap. Emits `MaxPerInvestorCapRaised`.
+
+#### `lower_max_per_investor(env: Env, new_cap: i128) -> i128`
+
+Admin-only: lowers an already-configured per-investor cap while the escrow is open. The new cap
+must be positive and strictly less than the current cap. The lower cap applies to subsequent
+deposits; existing principal is not changed. Emits `MaxPerInvestorCapLowered`.
 
 #### `lower_max_unique_investors(env: Env, new_cap: u32) -> u32`
 

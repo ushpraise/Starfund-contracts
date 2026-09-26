@@ -238,9 +238,9 @@ fn escrow_error_discriminants_match_canonical_table() {
         (EscrowError::NewSmeSameAsCurrent, 162),
         (EscrowError::FundingDeadlinePassed, 164),
         (EscrowError::NoPendingAdmin, 172),
-        (EscrowError::FloorLowerNotOpen, 173),
-        (EscrowError::NewFloorNotLower, 174),
-        (EscrowError::NewFloorNotPositive, 175),
+        (EscrowError::FloorLowerNotOpen, 250),
+        (EscrowError::NewFloorNotLower, 252),
+        (EscrowError::NewFloorNotPositive, 251),
     ];
     assert_eq!(TABLE.len(), 89);
     for (variant, code) in TABLE {

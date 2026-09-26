@@ -55,6 +55,42 @@ Emitted when admin calls `lower_max_unique_investors` while the escrow is open.
 - `old_cap` (u32)
 - `new_cap` (u32)
 
+### `MinContributionFloorRaised` and `MinContributionFloorLowered`
+Emitted when an admin raises or lowers the per-deposit minimum contribution floor while the
+escrow is open.
+
+**Topics:**
+1. `floor_hi` or `floor_lo` (Symbol)
+2. `invoice_id` (Symbol)
+
+**Data Payload:**
+- `old_floor` (i128)
+- `new_floor` (i128)
+
+### `MaxPerInvestorCapRaised` and `MaxPerInvestorCapLowered`
+Emitted when an admin raises or lowers the cumulative per-investor contribution cap while the
+escrow is open.
+
+**Topics:**
+1. `inv_cap` (Symbol)
+2. `invoice_id` (Symbol)
+
+**Data Payload:**
+- `old_cap` (i128)
+- `new_cap` (i128)
+
+### `MaturityMaxHorizonRaised` and `MaturityMaxHorizonLowered`
+Emitted when an admin adjusts the maximum maturity horizon. Lowering is rejected if the
+proposed horizon would invalidate the escrow's current maturity.
+
+**Topics:**
+1. `mtry_rse` or `mtry_lwr` (Symbol)
+2. `invoice_id` (Symbol)
+
+**Data Payload:**
+- `old_horizon` (u64)
+- `new_horizon` (u64)
+
 ### `EscrowFunded`
 Emitted when an investor deposits principal.
 
