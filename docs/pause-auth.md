@@ -103,10 +103,11 @@ The pause gate is a **read-only precondition** that fires **before** `Address::r
 | `fund_with_commitment` | 210 | `PausedBlocksFunding` | `investor.require_auth()` |
 | `fund_batch` | 210 | `PausedBlocksFunding` | Per-investor `require_auth()` in loop |
 | `settle` | 211 | `PausedBlocksSettlement` | `sme_address.require_auth()` |
+| `partial_settle` | 211 | `PausedBlocksSettlement` | `caller.require_auth()` |
 | `withdraw` | 212 | `PausedBlocksWithdrawal` | `sme_address.require_auth()` |
 | `claim_investor_payout` | 213 | `PausedBlocksInvestorClaims` | `investor.require_auth()` |
 
-All six entrypoints apply the gate as:
+All pause-gated entrypoints apply the gate as:
 
 ```rust
 ensure(
@@ -203,7 +204,6 @@ The following state-mutating entrypoints are **not** affected by the operational
 | `lower_min_contribution_floor` | `escrow.admin` | Configuration change; only while open |
 | `update_maturity_max_horizon` | `escrow.admin` | Configuration change |
 | `extend_funding_deadline` | `escrow.admin` | Configuration change |
-| `partial_settle` | `sme_address` or `admin` | Deliberately excluded — admin-controlled oversight |
 | `sweep_terminal_dust` | `treasury` | Only legal-hold-gated; runs in terminal states only |
 | `refund` / `refund_batch` | investor | Operational in cancelled state |
 | `cancel_funding` | `escrow.admin` | Operational for cancellation path |

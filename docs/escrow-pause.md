@@ -71,7 +71,7 @@ matches its family (`All`, or the matching single scope).
 | Function | Scope | Error variant |
 |---|---|---|
 | `fund` / `fund_with_commitment` / `fund_batch` | Funding | `PausedBlocksFunding` (210) |
-| `settle` | Settlement | `PausedBlocksSettlement` (211) |
+| `settle`, `partial_settle` | Settlement | `PausedBlocksSettlement` (211) |
 | `withdraw` | Withdrawal | `PausedBlocksWithdrawal` (212) |
 | `claim_investor_payout` | Claims | `PausedBlocksInvestorClaims` (213) |
 | `cancel_funding` | Funding | `PausedBlocksCancelFunding` (214) |

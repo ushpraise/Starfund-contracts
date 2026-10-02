@@ -678,6 +678,68 @@ fn pause_settlement_scope_blocks_only_settlement() {
     assert_contract_error(client.try_settle(), EscrowError::PausedBlocksSettlement);
 }
 
+// A Settlement-scope pause must also block `partial_settle`: closing funding early
+// is a settlement-family state transition, not a funding one.
+#[test]
+fn pause_settlement_scope_blocks_partial_settle() {
+    let env = Env::default();
+    setup(&env);
+    let sac = env.register_stellar_asset_contract_v2(Address::generate(&env));
+    let token_id = sac.address();
+    let sac_admin = StellarAssetClient::new(&env, &token_id);
+    let client = StarfundEscrowClient::new(&env, &env.register(StarfundEscrow, ()));
+    let admin = Address::generate(&env);
+    let sme = Address::generate(&env);
+    client.init(
+        &admin,
+        &soroban_sdk::String::from_str(&env, "PAUSC005"),
+        &sme,
+        &TARGET,
+        &800i64,
+        &0u64,
+        &token_id,
+        &None,
+        &Address::generate(&env),
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None::<i64>,
+        &None::<u32>,
+    );
+    // Partially fund while the contract is still unpaused so the escrow stays open.
+    let investor = Address::generate(&env);
+    sac_admin.mint(&investor, &(TARGET / 2));
+    client.fund(&investor, &(TARGET / 2));
+    assert_eq!(client.get_escrow().status, 0u32);
+
+    client.set_paused(
+        &true,
+        &PauseScope::Settlement,
+        &PauseReason::TokenIntegration,
+    );
+
+    assert_contract_error(
+        client.try_partial_settle(&sme),
+        EscrowError::PausedBlocksSettlement,
+    );
+
+    // The rejection is atomic: the escrow stays open.
+    assert_eq!(client.get_escrow().status, 0u32);
+
+    // Clearing the pause restores the flow.
+    client.set_paused(
+        &false,
+        &PauseScope::Settlement,
+        &PauseReason::TokenIntegration,
+    );
+    assert_eq!(client.partial_settle(&sme).status, 1u32);
+}
+
 // pause all scopes: blocks every gated entrypoint family.
 #[test]
 fn pause_all_scope_blocks_every_gated_entrypoint() {

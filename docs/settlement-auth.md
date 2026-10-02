@@ -41,14 +41,17 @@ Closes funding early for an under-funded invoice, transitioning the escrow to a 
 | **Status precondition** | `status == 0` (Open) → `PartialSettleNotOpen (202)` if not |
 | **Unauthorized caller** | `PartialSettleUnauthorizedCaller (200)` |
 | **State transition** | `0 → 1` (writes `FundingCloseSnapshot` if not present) |
-| **Operational pause** | **Not checked** (partial settle is not pause-gated) |
+| **Operational pause** | Blocked if a pause blocks the Settlement family → `PausedBlocksSettlement (211)` |
+| **Funded precondition** | `funded_amount > 0` → `PartialSettleNoFunds (209)` if not |
 
 **Guard ordering:**
-1. `caller.require_auth()`
-2. `guard_not_legal_hold(..., LegalHoldBlocksPartialSettle)`
-3. Load escrow (no auth on load)
-4. `ensure(caller == sme_address || caller == admin, PartialSettleUnauthorizedCaller)`
-5. `guard_status_eq(..., 0, PartialSettleNotOpen)`
+1. `guard_not_paused(..., PausedBlocksSettlement, PauseEntry::Settlement)`
+2. `caller.require_auth()`
+3. `guard_not_legal_hold(..., LegalHoldBlocksPartialSettle)`
+4. Load escrow (no auth on load)
+5. `ensure(caller == sme_address || caller == admin, PartialSettleUnauthorizedCaller)`
+6. `guard_status_eq(..., 0, PartialSettleNotOpen)`
+7. `ensure(escrow.funded_amount > 0, PartialSettleNoFunds)`
 
 ---
 
@@ -242,6 +245,7 @@ Treasury sweeps residual funding-token balance from a terminal escrow (status 2,
 | 200 | `PartialSettleUnauthorizedCaller` | `partial_settle()` by non-SME/non-Admin |
 | 201 | `LegalHoldBlocksPartialSettle` | `partial_settle()` with active legal hold |
 | 202 | `PartialSettleNotOpen` | `partial_settle()` when `status != 0` |
+| 209 | `PartialSettleNoFunds` | `partial_settle()` when `funded_amount == 0` |
 | 211 | `PausedBlocksSettlement` | `settle()` when paused |
 | 212 | `PausedBlocksWithdrawal` | `withdraw()` when paused |
 | 213 | `PausedBlocksInvestorClaims` | `claim_investor_payout()` when paused |

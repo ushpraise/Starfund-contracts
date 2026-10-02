@@ -1070,6 +1070,13 @@ pub enum EscrowError {
     NothingToWithdraw = 266,
     /// [`StarfundEscrow::cancel_funding`] called while a dispute remains active.
     DisputeBlocksCancelFunding = 267,
+    /// [`StarfundEscrow::partial_settle`] called while `funded_amount == 0`.
+    ///
+    /// Closing funding early on an escrow with no investor contributions would write a
+    /// [`FundingCloseSnapshot`] with `total_principal = 0`, pushing the zero-principal
+    /// division edge case into [`StarfundEscrow::withdraw`] and
+    /// [`StarfundEscrow::compute_investor_payout`]. Reject at the transition instead.
+    PartialSettleNoFunds = 209,
 }
 
 #[inline(always)]
@@ -2319,6 +2326,57 @@ pub struct EscrowPartialSettle {
     #[topic]
     pub invoice_id: Symbol,
     pub funded_amount: i128,
+}
+
+/// Emitted exactly once when the escrow transitions from **open** (status 0) to **funded**
+/// (status 1), regardless of which entrypoint triggered the transition.
+///
+/// Indexers that need to react to the funding-close moment should listen for this event
+/// rather than filtering the per-deposit [`EscrowFunded`] stream for a `status == 1` payload,
+/// which would require buffering every deposit to detect the transition edge.
+///
+/// # Emission guarantees
+///
+/// - **Exactly once per escrow instance.** The `0 → 1` transition is guarded by the
+///   `FundingCloseSnapshot` write (which uses a `has` check) and by the `escrow.status == 0`
+///   precondition. Once status is 1 it never decreases, so this event can never be emitted
+///   a second time.
+/// - **No duplicate emission.** [`StarfundEscrow::update_funding_target`] emits this event in
+///   the same `if` branch that writes the status and the snapshot.
+///
+/// # Fields
+///
+/// - `name`: hardcoded `fund_chg` symbol — used by indexers for topic routing.
+/// - `invoice_id`: escrow invoice identifier.
+/// - `from_status`: always `0` (open); present for forward-compatibility if the event shape
+///   is reused for other transitions in the future.
+/// - `to_status`: always `1` (funded).
+/// - `funded_amount`: total principal at the moment of transition (equals
+///   [`FundingCloseSnapshot::total_principal`]).
+/// - `funding_target`: the configured target at transition time (equals
+///   [`FundingCloseSnapshot::funding_target`]).
+/// - `ledger_timestamp`: [`Env::ledger`] timestamp at the moment of transition.
+/// - `trigger`: short routing symbol identifying which entrypoint caused the transition:
+///   `tgt_lower` for [`StarfundEscrow::update_funding_target`].
+#[contractevent]
+pub struct FundingStateChanged {
+    #[topic]
+    pub name: Symbol,
+    #[topic]
+    pub invoice_id: Symbol,
+    /// Previous status value; always `0` (open) for the `0 → 1` transition.
+    pub from_status: u32,
+    /// New status value; always `1` (funded) for the `0 → 1` transition.
+    pub to_status: u32,
+    /// Total principal at the moment of transition.
+    pub funded_amount: i128,
+    /// Configured funding target at transition time.
+    pub funding_target: i128,
+    /// Ledger timestamp at which the transition occurred.
+    pub ledger_timestamp: u64,
+    /// Short symbol identifying the entrypoint that caused the transition:
+    /// `tgt_lower` (update_funding_target).
+    pub trigger: Symbol,
 }
 
 #[contractevent]
@@ -6278,6 +6336,14 @@ impl StarfundEscrow {
         Self::consume_admin_nonce(&env, expected_nonce);
 
         ensure(&env, new_target > 0, EscrowError::TargetNotPositive);
+        // Keep the runtime target inside the same numeric envelope enforced at `init`, so an
+        // admin cannot configure a target whose coupon / pro-rata arithmetic would overflow
+        // `compute_investor_payout` at settlement time.
+        ensure(
+            &env,
+            new_target <= MAX_INVOICE_AMOUNT,
+            EscrowError::AmountExceedsMax,
+        );
         guard_status_eq(&env, escrow.status, 0, EscrowError::TargetUpdateNotOpen);
         ensure(
             &env,
@@ -6291,13 +6357,14 @@ impl StarfundEscrow {
         // If lowering the target causes it to equal (or fall to) the already-funded
         // amount, promote the escrow to funded and capture the immutable close snapshot
         // exactly once ΓÇö mirroring the promotion logic in `fund`/`fund_with_commitment`.
-        if escrow.funded_amount > 0
+        let status_transitioned = escrow.funded_amount > 0
             && escrow.funded_amount >= new_target
             && !env
                 .storage()
                 .instance()
-                .has(&keys::funding_close_snapshot())
-        {
+                .has(&keys::funding_close_snapshot());
+
+        if status_transitioned {
             escrow.status = 1;
             env.storage().instance().set(
                 &keys::funding_close_snapshot(),
@@ -6319,6 +6386,24 @@ impl StarfundEscrow {
             new_target,
         }
         .publish(&env);
+
+        // Indexers subscribe to `FundingStateChanged` (topic `fund_chg`) to observe the
+        // `0 -> 1` funding-close edge. Without this emission, escrows promoted to funded by a
+        // target update would silently skip the transition signal documented in
+        // `docs/EVENT_SCHEMA.md`.
+        if status_transitioned {
+            FundingStateChanged {
+                name: symbol_short!("fund_chg"),
+                invoice_id: escrow.invoice_id.clone(),
+                from_status: 0,
+                to_status: 1,
+                funded_amount: escrow.funded_amount,
+                funding_target: new_target,
+                ledger_timestamp: env.ledger().timestamp(),
+                trigger: symbol_short!("tgt_lower"),
+            }
+            .publish(&env);
+        }
 
         escrow
     }
@@ -7213,8 +7298,17 @@ impl StarfundEscrow {
     /// # Authorization
     /// The configured **SME** or **Admin** address must authorize this call.
     ///
-    /// Blocked while [`DataKey::LegalHold`] is active.
+    /// Blocked while [`DataKey::LegalHold`] is active, while an operational pause blocks the
+    /// [`PauseEntry::Settlement`] family, or when `funded_amount == 0`
+    /// ([`EscrowError::PartialSettleNoFunds`]).
     pub fn partial_settle(env: Env, caller: Address) -> InvoiceEscrow {
+        // Operational pause gate (read-only), before require_auth and orthogonal to legal hold.
+        guard_not_paused(
+            &env,
+            EscrowError::PausedBlocksSettlement,
+            PauseEntry::Settlement,
+        );
+
         caller.require_auth();
 
         guard_not_legal_hold(&env, EscrowError::LegalHoldBlocksPartialSettle);
@@ -7229,6 +7323,15 @@ impl StarfundEscrow {
         );
 
         guard_status_eq(&env, escrow.status, 0, EscrowError::PartialSettleNotOpen);
+
+        // Closing funding early on a zero-funded escrow would capture a
+        // `FundingCloseSnapshot` with `total_principal = 0`, pushing the zero-principal
+        // division edge case into `withdraw` / `compute_investor_payout`. Reject here.
+        ensure(
+            &env,
+            escrow.funded_amount > 0,
+            EscrowError::PartialSettleNoFunds,
+        );
 
         // Transition to funded status early.
         escrow.status = 1;

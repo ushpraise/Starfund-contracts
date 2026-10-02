@@ -39,7 +39,7 @@ Checked before `require_auth`, orthogonal to the legal hold. A pause auto-expire
 
 | Code | Variant | Entrypoint(s) | When it fires | How to avoid it |
 | ---: | --- | --- | --- | --- |
-| 211 | `PausedBlocksSettlement` | `settle` | The operational pause is active. | Wait for the pause to be cleared (`set_paused(false)`) or for the configured max duration to expire. |
+| 211 | `PausedBlocksSettlement` | `settle`, `partial_settle` | The operational pause blocks the Settlement family. | Wait for the pause to be cleared (`set_paused(false)`) or for the configured max duration to expire. |
 | 212 | `PausedBlocksWithdrawal` | `withdraw` | The operational pause is active. | Same as above. |
 | 213 | `PausedBlocksInvestorClaims` | `claim_investor_payout` | The operational pause is active. | Same as above. |
 
@@ -54,6 +54,7 @@ Checked before `require_auth`, orthogonal to the legal hold. A pause auto-expire
 | Code | Variant | Entrypoint(s) | When it fires | How to avoid it |
 | ---: | --- | --- | --- | --- |
 | 202 | `PartialSettleNotOpen` | `partial_settle` | `InvoiceEscrow::status != 0` (escrow is not open). | `partial_settle` is only valid while the escrow is still accepting contributions (`status = 0`). Check status before calling. |
+| 209 | `PartialSettleNoFunds` | `partial_settle` | `InvoiceEscrow::funded_amount == 0`. | Record at least one investor contribution first; closing funding early on a zero-funded escrow would capture a zero-principal `FundingCloseSnapshot`. |
 | 121 | `SettlementNotFunded` | `settle` | `InvoiceEscrow::status != 1` and `status != 2` (escrow is neither funded nor already settled). | `settle` requires `status = 1`. Fund the escrow to the target (or call `partial_settle`) first. |
 | 236 | `EscrowAlreadySettled` | `settle` | `InvoiceEscrow::status == 2` (escrow is already settled). Settlement is strictly once-only. | Do not call `settle` again after a successful settlement; a re-entrant or replayed call is rejected with this dedicated, stable typed code. |
 | 124 | `WithdrawalNotFunded` | `withdraw` | `InvoiceEscrow::status != 1`. | `withdraw` requires `status = 1`. Call `settle` before `withdraw` is not the correct sequence — the SME must call `withdraw` while the escrow is in the funded state (`status = 1`), after which `settle` transitions to `status = 2`. Wait for funding to complete first. |

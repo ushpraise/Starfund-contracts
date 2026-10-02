@@ -1,9 +1,9 @@
 use super::*;
 use crate::{
     AdminAcceptedEvent, AdminProposalCancelled, AdminProposalSuperseded, AdminProposedEvent,
-    DeprecatedTransferAdminUsed, EscrowCloseSnapshot, FundingTargetUpdated,
+    DeprecatedTransferAdminUsed, EscrowCloseSnapshot, FundingStateChanged, FundingTargetUpdated,
     MaturityMaxHorizonRaised, PayerRotated, ProtocolFeeUpdated, RegistryRefRebound,
-    DEFAULT_MATURITY_MAX_HORIZON_SECS,
+    DEFAULT_MATURITY_MAX_HORIZON_SECS, MAX_INVOICE_AMOUNT,
 };
 
 use soroban_sdk::Event;
@@ -1867,6 +1867,163 @@ fn test_update_funding_target_equal_to_funded_amount_succeeds() {
     assert_eq!(updated.funding_target, 4_000i128);
     assert_eq!(updated.funded_amount, 4_000i128);
     assert_eq!(updated.status, 1);
+}
+
+/// `update_funding_target` must enforce the same upper bound that `init` applies to the
+/// invoice amount. Without it an admin could set a target so large that the coupon /
+/// pro-rata arithmetic in `compute_investor_payout` overflows at settlement time.
+#[test]
+fn test_update_funding_target_above_max_invoice_amount_rejected() {
+    let env = Env::default();
+    let (client, admin, sme) = setup(&env);
+    default_init(&client, &env, &admin, &sme);
+
+    assert_contract_error(
+        client.try_update_funding_target(&(MAX_INVOICE_AMOUNT + 1), &0u32),
+        EscrowError::AmountExceedsMax,
+    );
+
+    // The target is unchanged after the rejection.
+    assert_eq!(client.get_escrow().funding_target, TARGET);
+}
+
+/// `MAX_INVOICE_AMOUNT` is the inclusive upper bound and must be accepted.
+#[test]
+fn test_update_funding_target_at_max_invoice_amount_accepted() {
+    let env = Env::default();
+    let (client, admin, sme) = setup(&env);
+    default_init(&client, &env, &admin, &sme);
+
+    let updated = client.update_funding_target(&MAX_INVOICE_AMOUNT, &0u32);
+    assert_eq!(updated.funding_target, MAX_INVOICE_AMOUNT);
+}
+
+/// Lowering the target to `funded_amount` promotes the escrow to `status == 1`, and that
+/// `0 -> 1` transition must publish `FundingStateChanged` so indexers subscribed to it
+/// observe the funding-close edge documented in `docs/EVENT_SCHEMA.md`.
+#[test]
+fn test_update_funding_target_promotion_emits_funding_state_changed() {
+    use soroban_sdk::testutils::{Events as _, Ledger as _};
+
+    let env = Env::default();
+    setup(&env);
+    // `setup` normalises the ledger, so pin the timestamp afterwards: the event
+    // carries the ledger time at the moment of the transition.
+    env.ledger().set_timestamp(9_000);
+
+    let sac = install_stellar_asset_token(&env);
+    let (contract_id, client) = deploy_with_id(&env);
+    let admin = Address::generate(&env);
+    let sme = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    client.init(
+        &admin,
+        &soroban_sdk::String::from_str(&env, "FSC001"),
+        &sme,
+        &10_000i128,
+        &800i64,
+        &0u64,
+        &sac.id,
+        &None,
+        &treasury,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None::<i64>,
+        &None::<u32>,
+    );
+    let investor = Address::generate(&env);
+    sac.stellar.mint(&investor, &4_000i128);
+    client.fund(&investor, &4_000i128);
+    assert_eq!(client.get_escrow().status, 0u32);
+
+    let updated = client.update_funding_target(&4_000i128, &0u32);
+    // Capture immediately: later client getters re-run host code and reset the log.
+    let events = env.events().all();
+    assert_eq!(updated.status, 1u32);
+
+    assert!(
+        events.events().contains(
+            &FundingStateChanged {
+                name: symbol_short!("fund_chg"),
+                invoice_id: client.get_escrow().invoice_id,
+                from_status: 0,
+                to_status: 1,
+                funded_amount: 4_000i128,
+                funding_target: 4_000i128,
+                ledger_timestamp: 9_000u64,
+                trigger: symbol_short!("tgt_lower"),
+            }
+            .to_xdr(&env, &contract_id)
+        ),
+        "update_funding_target must emit FundingStateChanged on promotion to funded"
+    );
+}
+
+/// Raising the target (no `0 -> 1` transition) must NOT emit `FundingStateChanged`: the
+/// event is scoped to the funding-close edge only.
+#[test]
+fn test_update_funding_target_raise_does_not_emit_funding_state_changed() {
+    use soroban_sdk::testutils::Events as _;
+
+    let env = Env::default();
+    env.mock_all_auths();
+    setup(&env);
+
+    let sac = install_stellar_asset_token(&env);
+    let (contract_id, client) = deploy_with_id(&env);
+    let admin = Address::generate(&env);
+    let sme = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    client.init(
+        &admin,
+        &soroban_sdk::String::from_str(&env, "FSC002"),
+        &sme,
+        &10_000i128,
+        &800i64,
+        &0u64,
+        &sac.id,
+        &None,
+        &treasury,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None::<i64>,
+        &None::<u32>,
+    );
+    let investor = Address::generate(&env);
+    sac.stellar.mint(&investor, &4_000i128);
+    client.fund(&investor, &4_000i128);
+
+    client.update_funding_target(&9_000i128, &0u32);
+    let events = env.events().all();
+    assert_eq!(client.get_escrow().status, 0u32);
+
+    let transition = FundingStateChanged {
+        name: symbol_short!("fund_chg"),
+        invoice_id: client.get_escrow().invoice_id,
+        from_status: 0,
+        to_status: 1,
+        funded_amount: 4_000i128,
+        funding_target: 9_000i128,
+        ledger_timestamp: 0u64,
+        trigger: symbol_short!("tgt_lower"),
+    }
+    .to_xdr(&env, &contract_id);
+    assert!(
+        !events.events().contains(&transition),
+        "a non-transitioning target update must not emit FundingStateChanged"
+    );
 }
 
 /// Passing a negative value must panic with "Target must be strictly positive".

@@ -14,6 +14,7 @@ code/name summary only.
 | `PartialSettleUnauthorizedCaller` | 200 | `caller` passed to `partial_settle` is neither the SME address nor the admin. |
 | `LegalHoldBlocksPartialSettle` | 201 | A legal hold is active when `partial_settle` is called. |
 | `PartialSettleNotOpen` | 202 | `partial_settle` called while escrow status is not `Open` (0). |
+| `PartialSettleNoFunds` | 209 | `partial_settle` called while `funded_amount == 0`; closing funding early would capture a zero-principal `FundingCloseSnapshot`. |
 | `LegalHoldBlocksSettlement` | 120 | A legal hold is active when `settle` is called. |
 | `SettlementNotFunded` | 121 | `settle` called while the escrow is not in the `Funded` state (1) and not already `Settled` (2). For an already-settled escrow see `EscrowAlreadySettled` (236). |
 | `EscrowAlreadySettled` | 236 | `settle` (or a `settle_batch` entry) called on an escrow already in the `Settled` state (2). Settlement is strictly once-only. |

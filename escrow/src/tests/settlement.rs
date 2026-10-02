@@ -1593,11 +1593,49 @@ fn test_partial_settle_admin_happy_path() {
     let (client, admin, sme) = setup(&env);
     default_init(&client, &env, &admin, &sme);
 
+    // Partially fund: `partial_settle` requires a positive `funded_amount`.
+    let investor = Address::generate(&env);
+    client.fund(&investor, &(TARGET / 2));
+
     // Admin settles early
     client.partial_settle(&admin);
 
     let escrow = client.get_escrow();
     assert_eq!(escrow.status, 1u32);
+}
+
+/// `partial_settle` on a freshly initialized, zero-funded escrow is rejected with
+/// [`EscrowError::PartialSettleNoFunds`]. Without this guard the escrow would be promoted
+/// to `status == 1` with a `FundingCloseSnapshot` carrying `total_principal = 0`.
+#[test]
+fn test_partial_settle_zero_funded_rejected() {
+    let env = Env::default();
+    let (client, admin, sme) = setup(&env);
+    default_init(&client, &env, &admin, &sme);
+
+    assert_eq!(client.get_escrow().funded_amount, 0i128);
+
+    assert_contract_error(
+        client.try_partial_settle(&sme),
+        EscrowError::PartialSettleNoFunds,
+    );
+
+    // The rejection is atomic: status and the close snapshot are untouched.
+    assert_eq!(client.get_escrow().status, 0u32);
+    assert_eq!(client.get_funding_close_snapshot(), None);
+}
+
+/// The zero-funded guard applies to the admin authority path too, not just the SME.
+#[test]
+fn test_partial_settle_zero_funded_rejected_for_admin() {
+    let env = Env::default();
+    let (client, admin, sme) = setup(&env);
+    default_init(&client, &env, &admin, &sme);
+
+    assert_contract_error(
+        client.try_partial_settle(&admin),
+        EscrowError::PartialSettleNoFunds,
+    );
 }
 
 #[test]
@@ -1660,6 +1698,9 @@ fn test_funding_blocked_after_partial_settle() {
     let (client, admin, sme) = setup(&env);
     default_init(&client, &env, &admin, &sme);
 
+    // Partially fund first: `partial_settle` rejects a zero-funded escrow.
+    let first_investor = Address::generate(&env);
+    client.fund(&first_investor, &1_000i128);
     client.partial_settle(&sme);
 
     let late_investor = Address::generate(&env);

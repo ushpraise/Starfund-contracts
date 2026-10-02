@@ -56,7 +56,7 @@ The current contract defines 20 event structs.
 | `EscrowInitialized` | `escrow_ii` | `init` |
 | `MaxUniqueInvestorsCapLowered` | `inv_cap` | `lower_max_unique_investors` |
 | `EscrowFunded` | `funded` | `fund`, `fund_with_commitment` |
-| `FundingStateChanged` | `fund_st_ch` | `fund`, `fund_with_commitment`, `fund_batch`, `update_funding_target`, `partial_settle` |
+| `FundingStateChanged` | `fund_chg` | `update_funding_target` |
 | `EscrowSettled` | `escrow_sd` | `settle` |
 | `MaturityUpdatedEvent` | `maturity` | `update_maturity` |
 | `AdminAcceptedEvent` | `adm_acc` | `accept_admin` |
@@ -160,7 +160,7 @@ Topics:
 | Index | Field | Type | Value |
 |---:|---|---|---|
 | 0 | fixed event topic | `Symbol` | `funding_state_changed` |
-| 1 | `name` | `Symbol` | `fund_st_ch` |
+| 1 | `name` | `Symbol` | `fund_chg` |
 | 2 | `invoice_id` | `Symbol` | Escrow invoice id |
 
 Data:
