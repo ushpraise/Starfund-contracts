@@ -39,6 +39,7 @@ re-implementing storage reads to guarantee identical semantics.
 
 **Maturity & Settlement:**
 - [has_maturity_lock](#has_maturity_lock--bool)
+- [get_settlement_readiness](#get_settlement_readiness--settlementreadiness)
 - [get_funding_close_snapshot](#get_funding_close_snapshot--optionfundingclosesnapshot)
 
 **Tier Lookup:**
@@ -54,6 +55,7 @@ re-implementing storage reads to guarantee identical semantics.
 - [compute_investor_payout](#compute_investor_payoutinvestor-address--i128)
 - [get_claimable_payout](#get_claimable_payoutinvestor-address--i128)
 - [get_settlement_pool](#get_settlement_pool--i128)
+- [get_settlement_claims](#get_settlement_claims--settlementclaims)
 
 **Attestations:**
 - [get_primary_attestation_hash](#get_primary_attestation_hash--optionbytesn32)
@@ -472,6 +474,25 @@ return get_escrow().maturity > 0
 
 ---
 
+### `get_settlement_readiness() → SettlementReadiness`
+
+Returns the lifecycle gates and live SEP-41 funding required to settle:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `is_settleable` | `bool` | Escrow is funded, matured, and not on legal hold. |
+| `legal_hold_active` | `bool` | A legal/compliance hold is active. |
+| `maturity_reached` | `bool` | Maturity is zero or the current ledger timestamp reached maturity. |
+| `required_balance` | `i128` | Base-yield settlement pool required by `settle()`. |
+| `contract_balance` | `i128` | Current funding-token balance held by the escrow contract. |
+| `balance_sufficient` | `bool` | `contract_balance >= required_balance`. |
+| `ready_now` | `bool` | `is_settleable && balance_sufficient`. |
+
+For funded escrows, the view queries the configured SEP-41 token contract. It is read-only and
+requires no authorization.
+
+---
+
 ### `get_funding_close_snapshot() → Option<FundingCloseSnapshot>`
 
 **Storage key:** `DataKey::FundingCloseSnapshot`  
@@ -815,6 +836,24 @@ values, so the pool is never under-funded for tiered claims. Any sub-unit residu
 #### Authorization
 
 None — pure read; no auth required and no state mutation.
+
+---
+
+### `get_settlement_claims() → SettlementClaims`
+
+**Signature:** `pub fn get_settlement_claims(env: Env) -> SettlementClaims`
+
+Returns the aggregate settlement pool split into claimed and remaining payouts:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `total_pool` | `i128` | Total investor payout liability, matching `get_settlement_pool()`. |
+| `claimed_amount` | `i128` | Sum of computed payouts for investors whose `InvestorClaimed` marker is set. |
+| `remaining_amount` | `i128` | `total_pool - claimed_amount`. |
+
+This read-only view scans the bounded investor index; consumers do not need to enumerate
+investors or sum claims off-chain. Each payout uses the same pro-rata and yield-tier arithmetic as
+`compute_investor_payout()`.
 
 ---
 
