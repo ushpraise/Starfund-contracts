@@ -368,6 +368,40 @@ fn test_claim_investor_twice_is_idempotent() {
 }
 
 #[test]
+fn get_claimable_payout_is_zero_after_investor_claims() {
+    let env = Env::default();
+    let target = 1_000i128;
+    let (client, token, contract_id, _) =
+        setup_claim_env(&env, "CLM_VIEW", target, 800i64);
+
+    let investor = Address::generate(&env);
+    token.stellar.mint(&investor, &target);
+    client.fund(&investor, &target);
+    token.stellar.mint(&contract_id, &(target * 800 / 10_000));
+    client.settle();
+    env.ledger().set_timestamp(1);
+
+    let theoretical_payout = client.compute_investor_payout(&investor);
+    assert_eq!(
+        client.get_claimable_payout(&investor),
+        theoretical_payout
+    );
+
+    client.claim_investor_payout(&investor);
+    assert!(client.is_investor_claimed(&investor));
+    assert_eq!(
+        client.get_claimable_payout(&investor),
+        0,
+        "claimed payouts are no longer claimable"
+    );
+    assert_eq!(
+        client.compute_investor_payout(&investor),
+        theoretical_payout,
+        "theoretical payout view remains unchanged"
+    );
+}
+
+#[test]
 #[should_panic]
 fn test_claim_by_non_investor_panics() {
     let env = Env::default();
