@@ -23,7 +23,7 @@ use super::{
 };
 use crate::{
     EscrowError, EscrowSettled, InvoiceEscrow, StarfundEscrow, SettlementConfig,
-    SettlementReadiness, SettlementResult, SmeWithdrew, YieldTier,
+    SettlementClaims, SettlementReadiness, SettlementResult, SmeWithdrew, YieldTier,
 };
 use soroban_sdk::{
     symbol_short,
@@ -365,6 +365,40 @@ fn test_claim_investor_twice_is_idempotent() {
     // Second claim - should be idempotent (no-op, does not panic)
     client.claim_investor_payout(&investor);
     assert!(client.is_investor_claimed(&investor));
+}
+
+#[test]
+fn get_claimable_payout_is_zero_after_investor_claims() {
+    let env = Env::default();
+    let target = 1_000i128;
+    let (client, token, contract_id, _) =
+        setup_claim_env(&env, "CLM_VIEW", target, 800i64);
+
+    let investor = Address::generate(&env);
+    token.stellar.mint(&investor, &target);
+    client.fund(&investor, &target);
+    token.stellar.mint(&contract_id, &(target * 800 / 10_000));
+    client.settle();
+    env.ledger().set_timestamp(1);
+
+    let theoretical_payout = client.compute_investor_payout(&investor);
+    assert_eq!(
+        client.get_claimable_payout(&investor),
+        theoretical_payout
+    );
+
+    client.claim_investor_payout(&investor);
+    assert!(client.is_investor_claimed(&investor));
+    assert_eq!(
+        client.get_claimable_payout(&investor),
+        0,
+        "claimed payouts are no longer claimable"
+    );
+    assert_eq!(
+        client.compute_investor_payout(&investor),
+        theoretical_payout,
+        "theoretical payout view remains unchanged"
+    );
 }
 
 #[test]
@@ -2200,6 +2234,49 @@ fn test_is_settleable_normal_successful() {
     assert!(client.is_settleable(), "normal successful is settleable");
 }
 
+fn setup_funded_readiness_escrow<'a>(
+    env: &'a Env,
+    invoice_id: &str,
+    maturity: u64,
+) -> super::StarfundEscrowClient<'a> {
+    env.mock_all_auths();
+    let token = install_stellar_asset_token(env);
+    let (contract_id, client) = deploy_with_id(env);
+    let admin = Address::generate(env);
+    let sme = Address::generate(env);
+    let treasury = Address::generate(env);
+    let yield_bps = 800i64;
+
+    client.init(
+        &admin,
+        &String::from_str(env, invoice_id),
+        &sme,
+        &TARGET,
+        &yield_bps,
+        &maturity,
+        &token.id,
+        &None,
+        &treasury,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None::<i64>,
+        &None::<u32>,
+    );
+
+    let investor = Address::generate(env);
+    token.stellar.mint(&investor, &TARGET);
+    client.fund(&investor, &TARGET);
+    let coupon = TARGET * yield_bps as i128 / 10_000;
+    token.stellar.mint(&contract_id, &coupon);
+    client
+}
+
 // ── get_settlement_readiness bundled view coverage (issue #558) ───────────────
 
 /// Open (not yet funded) escrow with no maturity lock: not settleable, no hold,
@@ -2217,6 +2294,9 @@ fn test_settlement_readiness_open_not_ready() {
             is_settleable: false,
             legal_hold_active: false,
             maturity_reached: true, // maturity == 0 ⇒ vacuously reached
+            required_balance: 0,
+            contract_balance: 0,
+            balance_sufficient: true,
             ready_now: false,
         }
     );
@@ -2228,14 +2308,15 @@ fn test_settlement_readiness_open_not_ready() {
 #[test]
 fn test_settlement_readiness_funded_ready_predicts_settle() {
     let env = Env::default();
-    let (client, admin, sme) = setup(&env);
-    default_init(&client, &env, &admin, &sme);
-    fund_to_target(&client, &env);
+    let client = setup_funded_readiness_escrow(&env, "RDY_FUNDED", 0);
 
     let r = client.get_settlement_readiness();
     assert!(r.is_settleable);
     assert!(!r.legal_hold_active);
     assert!(r.maturity_reached);
+    assert_eq!(r.required_balance, TARGET + TARGET * 800 / 10_000);
+    assert_eq!(r.contract_balance, r.required_balance);
+    assert!(r.balance_sufficient);
     assert!(r.ready_now);
 
     // Parity: ready_now == true ⇒ settle succeeds on the current ledger.
@@ -2248,9 +2329,7 @@ fn test_settlement_readiness_funded_ready_predicts_settle() {
 #[test]
 fn test_settlement_readiness_funded_but_held_blocks_ready() {
     let env = Env::default();
-    let (client, admin, sme) = setup(&env);
-    default_init(&client, &env, &admin, &sme);
-    fund_to_target(&client, &env);
+    let client = setup_funded_readiness_escrow(&env, "RDY_HELD", 0);
 
     client.set_legal_hold(&true);
 
@@ -2273,42 +2352,36 @@ fn test_settlement_readiness_funded_but_held_blocks_ready() {
     );
 }
 
+#[test]
+fn settlement_readiness_reports_insufficient_contract_balance() {
+    let env = Env::default();
+    let (client, token, _contract_id, _) =
+        setup_claim_env(&env, "RDY_SHORT", TARGET, 800i64);
+    let investor = Address::generate(&env);
+    token.stellar.mint(&investor, &TARGET);
+    client.fund(&investor, &TARGET);
+
+    let readiness = client.get_settlement_readiness();
+    assert!(readiness.is_settleable);
+    assert_eq!(readiness.contract_balance, TARGET);
+    assert!(readiness.required_balance > readiness.contract_balance);
+    assert!(!readiness.balance_sufficient);
+    assert!(!readiness.ready_now);
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        client.settle();
+    }));
+    assert!(result.is_err());
+}
+
 /// Funded with a future maturity: pre-maturity `maturity_reached` is false and
 /// `ready_now` is false; after the maturity timestamp both flip true and `settle`
 /// succeeds — exercising the maturity precedence branch.
 #[test]
 fn test_settlement_readiness_maturity_gate_parity() {
     let env = Env::default();
-    env.mock_all_auths();
-
-    let client = deploy(&env);
-    let admin = Address::generate(&env);
-    let sme = Address::generate(&env);
-    let (token, treasury) = free_addresses(&env);
-
     let maturity: u64 = 20_000;
-    client.init(
-        &admin,
-        &String::from_str(&env, "INV_RDY_MAT"),
-        &sme,
-        &TARGET,
-        &800i64,
-        &maturity,
-        &token,
-        &None,
-        &treasury,
-        &None,
-        &None,
-        &None,
-        &None,
-        &None,
-        &None,
-        &None,
-        &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
-    fund_to_target(&client, &env);
+    let client = setup_funded_readiness_escrow(&env, "INV_RDY_MAT", maturity);
 
     // Pre-maturity: not reached, not ready.
     env.ledger().set_timestamp(maturity - 1);
@@ -2333,10 +2406,9 @@ fn test_settlement_readiness_maturity_gate_parity() {
 
 // ── get_settlement_readiness field-by-field parity with source predicates ──
 
-/// Assert that every field of [`SettlementReadiness`] matches the corresponding
-/// standalone predicate and that the invariant `ready_now == is_settleable`
-/// holds. Also verifies the struct never reports settleable/ready while a legal
-/// hold is active.
+/// Assert that every field of [`SettlementReadiness`] matches its corresponding
+/// predicate and that `ready_now` includes both lifecycle and balance gates.
+/// Also verifies the struct never reports settleable/ready while a legal hold is active.
 fn assert_readiness_matches_predicates(env: &Env, client: &super::StarfundEscrowClient<'_>) {
     let r = client.get_settlement_readiness();
     assert_eq!(
@@ -2356,8 +2428,14 @@ fn assert_readiness_matches_predicates(env: &Env, client: &super::StarfundEscrow
         "maturity_reached must match derived predicate from has_maturity_lock() + ledger timestamp"
     );
     assert_eq!(
-        r.ready_now, r.is_settleable,
-        "ready_now must equal is_settleable by construction"
+        r.balance_sufficient,
+        r.contract_balance >= r.required_balance,
+        "balance_sufficient must match the current token balance and required pool"
+    );
+    assert_eq!(
+        r.ready_now,
+        r.is_settleable && r.balance_sufficient,
+        "ready_now must include lifecycle and funding gates"
     );
     assert!(
         !(r.is_settleable && r.legal_hold_active),
@@ -2382,9 +2460,7 @@ fn test_readiness_fields_open_not_funded() {
 #[test]
 fn test_readiness_fields_funded_no_lock_no_hold() {
     let env = Env::default();
-    let (client, admin, sme) = setup(&env);
-    default_init(&client, &env, &admin, &sme);
-    fund_to_target(&client, &env);
+    let client = setup_funded_readiness_escrow(&env, "READY_FUN", 0);
     assert_readiness_matches_predicates(&env, &client);
 }
 
@@ -2393,9 +2469,7 @@ fn test_readiness_fields_funded_no_lock_no_hold() {
 #[test]
 fn test_readiness_fields_funded_no_lock_with_hold() {
     let env = Env::default();
-    let (client, admin, sme) = setup(&env);
-    default_init(&client, &env, &admin, &sme);
-    fund_to_target(&client, &env);
+    let client = setup_funded_readiness_escrow(&env, "READY_HLD0", 0);
     client.set_legal_hold(&true);
     assert_readiness_matches_predicates(&env, &client);
 }
@@ -2405,37 +2479,8 @@ fn test_readiness_fields_funded_no_lock_with_hold() {
 #[test]
 fn test_readiness_fields_pre_maturity() {
     let env = Env::default();
-    env.mock_all_auths();
-    let token = install_stellar_asset_token(&env);
-    let (contract_id, client) = deploy_with_id(&env);
-    let admin = Address::generate(&env);
-    let sme = Address::generate(&env);
-    let treasury = Address::generate(&env);
     let maturity: u64 = 20_000;
-    client.init(
-        &admin,
-        &String::from_str(&env, "READY_PRE"),
-        &sme,
-        &TARGET,
-        &500i64,
-        &maturity,
-        &token.id,
-        &None,
-        &treasury,
-        &None,
-        &None,
-        &None,
-        &None,
-        &None,
-        &None,
-        &None,
-        &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
-    let investor = Address::generate(&env);
-    token.stellar.mint(&investor, &TARGET);
-    client.fund(&investor, &TARGET);
+    let client = setup_funded_readiness_escrow(&env, "READY_PRE", maturity);
     env.ledger().set_timestamp(maturity - 1);
     assert_readiness_matches_predicates(&env, &client);
 }
@@ -2444,37 +2489,8 @@ fn test_readiness_fields_pre_maturity() {
 #[test]
 fn test_readiness_fields_at_maturity() {
     let env = Env::default();
-    env.mock_all_auths();
-    let token = install_stellar_asset_token(&env);
-    let (contract_id, client) = deploy_with_id(&env);
-    let admin = Address::generate(&env);
-    let sme = Address::generate(&env);
-    let treasury = Address::generate(&env);
     let maturity: u64 = 20_000;
-    client.init(
-        &admin,
-        &String::from_str(&env, "READY_AT"),
-        &sme,
-        &TARGET,
-        &500i64,
-        &maturity,
-        &token.id,
-        &None,
-        &treasury,
-        &None,
-        &None,
-        &None,
-        &None,
-        &None,
-        &None,
-        &None,
-        &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
-    let investor = Address::generate(&env);
-    token.stellar.mint(&investor, &TARGET);
-    client.fund(&investor, &TARGET);
+    let client = setup_funded_readiness_escrow(&env, "READY_AT", maturity);
     env.ledger().set_timestamp(maturity);
     assert_readiness_matches_predicates(&env, &client);
 }
@@ -2484,37 +2500,8 @@ fn test_readiness_fields_at_maturity() {
 #[test]
 fn test_readiness_fields_after_maturity_with_hold() {
     let env = Env::default();
-    env.mock_all_auths();
-    let token = install_stellar_asset_token(&env);
-    let (contract_id, client) = deploy_with_id(&env);
-    let admin = Address::generate(&env);
-    let sme = Address::generate(&env);
-    let treasury = Address::generate(&env);
     let maturity: u64 = 20_000;
-    client.init(
-        &admin,
-        &String::from_str(&env, "READY_HLD"),
-        &sme,
-        &TARGET,
-        &500i64,
-        &maturity,
-        &token.id,
-        &None,
-        &treasury,
-        &None,
-        &None,
-        &None,
-        &None,
-        &None,
-        &None,
-        &None,
-        &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
-    let investor = Address::generate(&env);
-    token.stellar.mint(&investor, &TARGET);
-    client.fund(&investor, &TARGET);
+    let client = setup_funded_readiness_escrow(&env, "READY_HLD1", maturity);
     env.ledger().set_timestamp(maturity + 100);
     client.set_legal_hold(&true);
     assert_readiness_matches_predicates(&env, &client);
@@ -2524,9 +2511,7 @@ fn test_readiness_fields_after_maturity_with_hold() {
 #[test]
 fn test_readiness_fields_already_settled() {
     let env = Env::default();
-    let (client, admin, sme) = setup(&env);
-    default_init(&client, &env, &admin, &sme);
-    fund_to_target(&client, &env);
+    let client = setup_funded_readiness_escrow(&env, "READY_SET", 0);
     client.settle();
     assert_readiness_matches_predicates(&env, &client);
 }
@@ -2536,13 +2521,11 @@ fn test_readiness_fields_already_settled() {
 #[test]
 fn test_readiness_fields_zero_maturity_lock_false() {
     let env = Env::default();
-    let (client, admin, sme) = setup(&env);
-    default_init(&client, &env, &admin, &sme);
+    let client = setup_funded_readiness_escrow(&env, "READY_ZERO", 0);
     assert!(
         !client.has_maturity_lock(),
         "maturity=0 → has_maturity_lock must be false"
     );
-    fund_to_target(&client, &env);
     assert_readiness_matches_predicates(&env, &client);
 }
 
@@ -3950,6 +3933,56 @@ fn tiered_settlement_pool_covers_sum_of_investor_payouts() {
         token.stellar.balance(&inv_base),
         payout_base,
         "base-yield investor must receive their full payout",
+    );
+}
+
+#[test]
+fn settlement_claims_tracks_claimed_and_remaining_payouts() {
+    let env = Env::default();
+    let target = 2_000i128;
+    let (client, token, contract_id, _treasury) =
+        setup_tiered_pool(&env, "CLM_SUM", target, 800i64, None);
+
+    let investor_a = Address::generate(&env);
+    let investor_b = Address::generate(&env);
+    token.stellar.mint(&investor_a, &1_000i128);
+    token.stellar.mint(&investor_b, &1_000i128);
+    client.fund(&investor_a, &1_000i128);
+    client.fund(&investor_b, &1_000i128);
+    token.stellar.mint(&contract_id, &(target * 800 / 10_000));
+    client.settle();
+
+    let total_pool = client.get_settlement_pool();
+    env.ledger().set_timestamp(1);
+
+    assert_eq!(
+        client.get_settlement_claims(),
+        SettlementClaims {
+            total_pool,
+            claimed_amount: 0,
+            remaining_amount: total_pool,
+        }
+    );
+
+    let payout_a = client.compute_investor_payout(&investor_a);
+    client.claim_investor_payout(&investor_a);
+    assert_eq!(
+        client.get_settlement_claims(),
+        SettlementClaims {
+            total_pool,
+            claimed_amount: payout_a,
+            remaining_amount: total_pool - payout_a,
+        }
+    );
+
+    client.claim_investor_payout(&investor_b);
+    assert_eq!(
+        client.get_settlement_claims(),
+        SettlementClaims {
+            total_pool,
+            claimed_amount: total_pool,
+            remaining_amount: 0,
+        }
     );
 }
 
