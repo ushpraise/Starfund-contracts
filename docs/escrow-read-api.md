@@ -54,6 +54,7 @@ re-implementing storage reads to guarantee identical semantics.
 - [compute_investor_payout](#compute_investor_payoutinvestor-address--i128)
 - [get_claimable_payout](#get_claimable_payoutinvestor-address--i128)
 - [get_settlement_pool](#get_settlement_pool--i128)
+- [get_settlement_claims](#get_settlement_claims--settlementclaims)
 
 **Attestations:**
 - [get_primary_attestation_hash](#get_primary_attestation_hash--optionbytesn32)
@@ -815,6 +816,24 @@ values, so the pool is never under-funded for tiered claims. Any sub-unit residu
 #### Authorization
 
 None — pure read; no auth required and no state mutation.
+
+---
+
+### `get_settlement_claims() → SettlementClaims`
+
+**Signature:** `pub fn get_settlement_claims(env: Env) -> SettlementClaims`
+
+Returns the aggregate settlement pool split into claimed and remaining payouts:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `total_pool` | `i128` | Total investor payout liability, matching `get_settlement_pool()`. |
+| `claimed_amount` | `i128` | Sum of computed payouts for investors whose `InvestorClaimed` marker is set. |
+| `remaining_amount` | `i128` | `total_pool - claimed_amount`. |
+
+This read-only view scans the bounded investor index; consumers do not need to enumerate
+investors or sum claims off-chain. Each payout uses the same pro-rata and yield-tier arithmetic as
+`compute_investor_payout()`.
 
 ---
 

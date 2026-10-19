@@ -1888,6 +1888,19 @@ pub struct SettlementReadiness {
     pub ready_now: bool,
 }
 
+/// Aggregate settlement payout progress returned by
+/// [`StarfundEscrow::get_settlement_claims`].
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SettlementClaims {
+    /// Total liability across all investor payouts.
+    pub total_pool: i128,
+    /// Payouts already claimed by investors.
+    pub claimed_amount: i128,
+    /// Unclaimed investor liability (`total_pool - claimed_amount`).
+    pub remaining_amount: i128,
+}
+
 // ---------------------------------------------------------------------------
 // Rent-bump planning types (#1215)
 // ---------------------------------------------------------------------------
@@ -8195,6 +8208,44 @@ impl StarfundEscrow {
         }
 
         total_liability
+    }
+
+    /// Returns the total settlement liability split into claimed and remaining payouts.
+    ///
+    /// The claimed amount is derived from the immutable payout formula for investors whose
+    /// `InvestorClaimed` marker is set. The remaining amount is the total pool less those
+    /// payouts. Like [`StarfundEscrow::get_settlement_pool`], this scans the bounded investor
+    /// index and is a read-only view.
+    pub fn get_settlement_claims(env: Env) -> SettlementClaims {
+        let total_pool = Self::get_settlement_pool(env.clone());
+        let index: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::InvestorIndex)
+            .unwrap_or_else(|| Vec::new(&env));
+
+        let mut claimed_amount = 0i128;
+        for i in 0..index.len() {
+            let investor = index.get(i).unwrap();
+            if !Self::get_persistent_investor_claimed(&env, investor.clone()) {
+                continue;
+            }
+
+            let payout = Self::compute_investor_payout(env.clone(), investor);
+            claimed_amount = claimed_amount
+                .checked_add(payout)
+                .unwrap_or_else(|| fail(&env, EscrowError::ComputePayoutArithmeticOverflow));
+        }
+
+        let remaining_amount = total_pool
+            .checked_sub(claimed_amount)
+            .unwrap_or_else(|| fail(&env, EscrowError::ComputePayoutArithmeticOverflow));
+
+        SettlementClaims {
+            total_pool,
+            claimed_amount,
+            remaining_amount,
+        }
     }
 
     /// Admin-only setter for the invoice maturity timestamp.

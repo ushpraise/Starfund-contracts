@@ -23,7 +23,7 @@ use super::{
 };
 use crate::{
     EscrowError, EscrowSettled, InvoiceEscrow, StarfundEscrow, SettlementConfig,
-    SettlementReadiness, SettlementResult, SmeWithdrew, YieldTier,
+    SettlementClaims, SettlementReadiness, SettlementResult, SmeWithdrew, YieldTier,
 };
 use soroban_sdk::{
     symbol_short,
@@ -3950,6 +3950,56 @@ fn tiered_settlement_pool_covers_sum_of_investor_payouts() {
         token.stellar.balance(&inv_base),
         payout_base,
         "base-yield investor must receive their full payout",
+    );
+}
+
+#[test]
+fn settlement_claims_tracks_claimed_and_remaining_payouts() {
+    let env = Env::default();
+    let target = 2_000i128;
+    let (client, token, contract_id, _treasury) =
+        setup_tiered_pool(&env, "CLM_SUM", target, 800i64, None);
+
+    let investor_a = Address::generate(&env);
+    let investor_b = Address::generate(&env);
+    token.stellar.mint(&investor_a, &1_000i128);
+    token.stellar.mint(&investor_b, &1_000i128);
+    client.fund(&investor_a, &1_000i128);
+    client.fund(&investor_b, &1_000i128);
+    token.stellar.mint(&contract_id, &(target * 800 / 10_000));
+    client.settle();
+
+    let total_pool = client.get_settlement_pool();
+    env.ledger().set_timestamp(1);
+
+    assert_eq!(
+        client.get_settlement_claims(),
+        SettlementClaims {
+            total_pool,
+            claimed_amount: 0,
+            remaining_amount: total_pool,
+        }
+    );
+
+    let payout_a = client.compute_investor_payout(&investor_a);
+    client.claim_investor_payout(&investor_a);
+    assert_eq!(
+        client.get_settlement_claims(),
+        SettlementClaims {
+            total_pool,
+            claimed_amount: payout_a,
+            remaining_amount: total_pool - payout_a,
+        }
+    );
+
+    client.claim_investor_payout(&investor_b);
+    assert_eq!(
+        client.get_settlement_claims(),
+        SettlementClaims {
+            total_pool,
+            claimed_amount: total_pool,
+            remaining_amount: 0,
+        }
     );
 }
 
