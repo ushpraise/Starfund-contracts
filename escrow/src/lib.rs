@@ -7440,13 +7440,11 @@ impl StarfundEscrow {
         ensure(&env, escrow.status == 1, EscrowError::SettlementNotFunded);
 
         let now = env.ledger().timestamp();
-        if escrow.maturity > 0 {
-            ensure(
-                &env,
-                now >= escrow.maturity,
-                EscrowError::MaturityNotReached,
-            );
-        }
+        ensure(
+            &env,
+            is_maturity_reached(&env, escrow.maturity),
+            EscrowError::MaturityNotReached,
+        );
 
         // Compute settle_pool using the same arithmetic as compute_investor_payout.
         // coupon = funded_amount ├ù yield_bps / 10_000  (floor)
