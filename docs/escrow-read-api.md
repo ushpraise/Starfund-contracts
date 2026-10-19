@@ -39,6 +39,7 @@ re-implementing storage reads to guarantee identical semantics.
 
 **Maturity & Settlement:**
 - [has_maturity_lock](#has_maturity_lock--bool)
+- [get_settlement_readiness](#get_settlement_readiness--settlementreadiness)
 - [get_funding_close_snapshot](#get_funding_close_snapshot--optionfundingclosesnapshot)
 
 **Tier Lookup:**
@@ -470,6 +471,25 @@ return get_escrow().maturity > 0
 **Return value:**
 - `true` — settlement requires `Env::ledger().timestamp() >= maturity`.
 - `false` — `maturity == 0`; no time lock, funded escrow can settle immediately.
+
+---
+
+### `get_settlement_readiness() → SettlementReadiness`
+
+Returns the lifecycle gates and live SEP-41 funding required to settle:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `is_settleable` | `bool` | Escrow is funded, matured, and not on legal hold. |
+| `legal_hold_active` | `bool` | A legal/compliance hold is active. |
+| `maturity_reached` | `bool` | Maturity is zero or the current ledger timestamp reached maturity. |
+| `required_balance` | `i128` | Base-yield settlement pool required by `settle()`. |
+| `contract_balance` | `i128` | Current funding-token balance held by the escrow contract. |
+| `balance_sufficient` | `bool` | `contract_balance >= required_balance`. |
+| `ready_now` | `bool` | `is_settleable && balance_sufficient`. |
+
+For funded escrows, the view queries the configured SEP-41 token contract. It is read-only and
+requires no authorization.
 
 ---
 

@@ -1870,10 +1870,9 @@ pub struct EscrowSummary {
 /// [`StarfundEscrow::get_legal_hold`], [`StarfundEscrow::has_maturity_lock`], and the maturity
 /// timestamp ΓÇö and re-deriving the contract's own precedence rules off-chain (which drifts).
 ///
-/// # Precedence
-/// `ready_now` is computed from the **same** single-source-of-truth gate `settle`/`partial_settle`
-/// apply (legal hold blocks first, then funded status, then maturity). A `true` value reliably
-/// predicts a successful `settle` on the current ledger.
+/// # Readiness
+/// `ready_now` is true only when lifecycle gates pass and the escrow contract's SEP-41 balance
+/// can fund the base-yield settlement pool. A `true` value predicts a successful `settle`.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SettlementReadiness {
@@ -1884,7 +1883,13 @@ pub struct SettlementReadiness {
     /// `true` when there is no maturity lock (`maturity == 0`) or the maturity timestamp has
     /// been reached (`now >= maturity`).
     pub maturity_reached: bool,
-    /// Single derived flag: `true` exactly when `settle` would succeed on the current ledger.
+    /// Base-yield settlement pool required by `settle`.
+    pub required_balance: i128,
+    /// Current SEP-41 funding-token balance held by the escrow contract.
+    pub contract_balance: i128,
+    /// `true` when `contract_balance >= required_balance`.
+    pub balance_sufficient: bool,
+    /// `true` when lifecycle gates pass and the contract has sufficient tokens.
     pub ready_now: bool,
 }
 
@@ -5160,6 +5165,20 @@ impl StarfundEscrow {
         true
     }
 
+    fn base_settlement_amounts(env: &Env, escrow: &InvoiceEscrow) -> (i128, i128) {
+        let coupon = escrow
+            .funded_amount
+            .checked_mul(escrow.yield_bps as i128)
+            .unwrap_or_else(|| fail(env, EscrowError::ComputePayoutArithmeticOverflow))
+            .checked_div(10_000)
+            .unwrap_or_else(|| fail(env, EscrowError::ComputePayoutArithmeticOverflow));
+        let settle_pool = escrow
+            .funded_amount
+            .checked_add(coupon)
+            .unwrap_or_else(|| fail(env, EscrowError::ComputePayoutArithmeticOverflow));
+        (coupon, settle_pool)
+    }
+
     /// Returns `true` when [`StarfundEscrow::settle`] would succeed for the current ledger state.
     ///
     /// Settlement requires:
@@ -5170,20 +5189,15 @@ impl StarfundEscrow {
         Self::settleable_now(&env)
     }
 
-    /// Bundle the settleable flag, legal-hold state, maturity-reached state, and a single derived
-    /// `ready_now` boolean into one [`SettlementReadiness`] result.
+    /// Bundle lifecycle gates and SEP-41 settlement funding into one [`SettlementReadiness`].
     ///
     /// Integrators otherwise have to call [`StarfundEscrow::is_settleable`],
     /// [`StarfundEscrow::get_legal_hold`], [`StarfundEscrow::has_maturity_lock`], and read the
     /// maturity timestamp separately, then replicate the contract's precedence rules ΓÇö which drifts
     /// out of sync and produces confusing UIs ("settleable" but blocked by a legal hold).
     ///
-    /// # Precedence
-    /// `ready_now` and `is_settleable` are computed from the **same** single-source-of-truth gate
-    /// (`Self::settleable_now`) that [`StarfundEscrow::settle`] and
-    /// [`StarfundEscrow::partial_settle`] apply: a legal hold blocks first, then funded status,
-    /// then maturity. A `ready_now == true` value therefore reliably predicts a successful `settle`
-    /// on the current ledger.
+    /// `ready_now` combines the lifecycle gate with a live SEP-41 balance check against the same
+    /// base-yield pool required by [`StarfundEscrow::settle`].
     ///
     /// # Read-only
     /// Pure view: no `require_auth`, no storage writes, and no TTL bump.
@@ -5194,12 +5208,23 @@ impl StarfundEscrow {
 
         // Reuse the single-source-of-truth gate so this view cannot drift from `settle`.
         let is_settleable = Self::settleable_now(&env);
+        let (_, required_balance) = Self::base_settlement_amounts(&env, &escrow);
+        let contract_balance = if escrow.status == 1 {
+            let token_addr = Self::funding_token_or_fail(&env);
+            TokenClient::new(&env, &token_addr).balance(&env.current_contract_address())
+        } else {
+            0
+        };
+        let balance_sufficient = contract_balance >= required_balance;
 
         SettlementReadiness {
             is_settleable,
             legal_hold_active,
             maturity_reached,
-            ready_now: is_settleable,
+            required_balance,
+            contract_balance,
+            balance_sufficient,
+            ready_now: is_settleable && balance_sufficient,
         }
     }
 
