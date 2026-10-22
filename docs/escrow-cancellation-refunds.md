@@ -41,20 +41,25 @@ Once the escrow is cancelled, investors are entitled to claim their contributed 
 
 ## 3. Residual Dust Sweeping and the Liability Floor
 
-The [`StarfundEscrow::sweep_terminal_dust`](../escrow/src/lib.rs) entrypoint is designed to allow the protocol treasury to recover rounding residue or accidental transfers. In a cancelled escrow, it enforces a strict **liability floor** to protect un-refunded investor funds.
+The [`StarfundEscrow::sweep_terminal_dust`](../escrow/src/lib.rs) entrypoint is designed to allow the protocol treasury to recover rounding residue or accidental transfers. In cancelled escrows, it enforces a strict **liability floor** to protect un-refunded investor funds. In withdrawn escrows, the same floor protects any principal not yet recorded as distributed.
 
 ### The Liability Floor Invariant
-To prevent the treasury from sweeping funds that are still owed to investors, the contract enforces:
+To prevent the treasury from sweeping funds that are still owed to investors, the contract enforces
+the following floor for cancelled escrows and for any undistributed principal in withdrawn escrows:
 ```text
 outstanding = funded_amount - distributed_principal
 assert balance - sweep_amt >= outstanding
 ```
-- `funded_amount`: The total amount of funding recorded when the escrow was cancelled.
-- `distributed_principal`: The total principal already returned to investors via `refund`.
-- `outstanding`: The total principal still owed to investors who have not yet claimed their refund.
+- `funded_amount`: The total amount of funding recorded for the escrow.
+- `distributed_principal`: In cancelled escrows, the total principal already returned to investors
+  via `refund`. In withdrawn escrows, the total principal already paid through `release` or
+  `withdraw`.
+- `outstanding`: The principal not yet recorded as distributed.
 - `balance`: The contract's current funding token balance.
 
-If the requested `sweep_amt` would make the remaining contract balance less than `outstanding`, the call panics with `SweepExceedsLiabilityFloor`.
+If the requested `sweep_amt` would make the remaining contract balance less than `outstanding`, the call panics with `SweepExceedsLiabilityFloor`. A normal completed withdrawal has no remaining principal liability; a withdrawn state with an outstanding amount remains protected.
+
+`release` itself requires status `1` (funded), so a later tranche cannot be released after the escrow reaches status `3` (withdrawn). The status-3 floor is defense in depth: it prevents sweeping any balance below the amount still outstanding according to `DistributedPrincipal`, including migrated or inconsistent state.
 
 ### Operator Guidance for Leftover Dust
 - **What is leftover dust?** It consists of accidental direct transfers to the contract address (bypassing the `fund` entrypoint) or minor rounding differences.

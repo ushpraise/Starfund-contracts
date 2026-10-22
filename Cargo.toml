@@ -14,5 +14,6 @@ strip = "symbols"
 exclude = [
     "src/test/*",
     "**/*_test.rs",
-    "tests/*"
+    "tests/*",
+    "escrow/src/tests/**"
 ]

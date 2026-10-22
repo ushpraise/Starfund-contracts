@@ -199,17 +199,17 @@ starfund-contracts/
 | `get_settlement_config` | — | Read-only bundled view of settlement configuration: `settlement_limit`, `yield_bps`, `protocol_fee_bps`, and `maturity`. Returns sensible defaults (`DEFAULT_SETTLEMENT_LIMIT`, `0`, `0`, `0`) before `init`. |
 | `get_reconciliation` | — | Read solvency position: live token balance, outstanding liability, and surplus/deficit. See [`docs/escrow-read-api.md`](docs/escrow-read-api.md). |
 
-| `rebind_registry_ref` | Admin | Set or update the off-chain registry hint (`DataKey::RegistryRef`). Emits `RegistryRefRebound`. |
-| `clear_registry_ref` | Admin | Convenience alias for `rebind_registry_ref(None)`. Clears the registry pointer. |
+| `rebind_registry_ref` | Admin | Set or update the off-chain registry hint (`DataKey::RegistryRef`) with the expected admin nonce. Emits `RegistryRefRebound`. |
+| `clear_registry_ref` | Admin | Convenience alias for `rebind_registry_ref(None, expected_nonce)`. Clears the registry pointer. |
 | `get_registry_ref` | — | Return the current registry hint, or `None` when unbound. |
 
 ---
 
 ## Off-chain registry-reference pointer
 
-The escrow stores an optional `Option<Address>` under `DataKey::RegistryRef` as a
-**discoverability hint** for off-chain indexers. It is set at `init` (optional) and
-can be updated or cleared at any time by the admin via `rebind_registry_ref` /
+The escrow stores an `Address` under `DataKey::RegistryRef` as a **discoverability hint**
+for off-chain indexers; an absent key represents `None`. It is set at `init` (optional)
+and can be updated or cleared before funding by the admin via `rebind_registry_ref` /
 `clear_registry_ref`.
 
 ### Non-authority guarantee
@@ -229,7 +229,7 @@ membership or as a security boundary.
 ### Mutation path
 
 Only the current escrow admin may call `rebind_registry_ref` or `clear_registry_ref`.
-Each call emits a `RegistryRefRebound` event (topic: `reg_rebind`) carrying the new
+Each call emits a `RegistryRefRebound` event (topic: `reg_rebd`) carrying the new
 `Option<Address>` value. Off-chain indexers should subscribe to this event to re-sync
 their cached pointer without polling.
 
@@ -237,9 +237,9 @@ their cached pointer without polling.
 
 1. **Init (optional bind):** `init` accepts an optional `registry: Option<Address>`.
    Passing `Some(addr)` stores the hint immediately; `None` leaves the pointer unset.
-2. **Rebind:** Admin calls `rebind_registry_ref(Some(new_addr))` to change the hint.
+2. **Rebind:** Before funding begins, admin calls `rebind_registry_ref(Some(new_addr), expected_nonce)` to change the hint.
    The `RegistryRefRebound` event fires with the new address.
-3. **Clear:** Admin calls `clear_registry_ref()` (or `rebind_registry_ref(None)`) to
+3. **Clear:** Admin calls `clear_registry_ref(expected_nonce)` (or `rebind_registry_ref(None, expected_nonce)`) to
    delete the key. The `RegistryRefRebound` event fires with `registry = None`.
 
 See [`docs/escrow-registry-ref.md`](docs/escrow-registry-ref.md) for the full lifecycle
@@ -432,3 +432,14 @@ cargo llvm-cov --features testutils --fail-under-lines 95 --summary-only -p star
 ## Contributing
 
 MIT
+
+## Handsoff notes
+
+<!-- handsoff-issue-281 -->
+- #281: [Wave 10 #178] set_storage_limit Lacks Minimum Lower Bound, Permitting limit = 0 and Bricking Batch Operations
+
+<!-- handsoff-issue-282 -->
+- #282: [Wave 10 #179] get_escrow Panics With Raw String Allocation on Uninitialized Contract Instead of Typed Error
+
+<!-- handsoff-issue-283 -->
+- #283: [Wave 10 #180] get_storage_limit Does Not Validate Key Presence Against Current Schema Version

@@ -11,13 +11,14 @@ $$Share_{investor} = \frac{Contribution_{investor}}{TotalPrincipal_{snapshot}}$$
 ### Why `TotalPrincipal`?
 Starfund escrows allow **over-funding** (deposits that exceed the `funding_target` in the same ledger). The `TotalPrincipal` in the `FundingCloseSnapshot` is the authoritative denominator for all pro-rata calculations.
 
-## 📏 Rounding Policy
+## Rounding Policy
 
-To ensure protocol solvency and prevent "penny-bleeding" attacks, integrators should follow these rounding rules:
-
-1.  **Investor Payouts**: Round **DOWN** (Floor) to the nearest base unit of the funding token.
-2.  **Protocol Fees**: Calculated on the remainder after all investor payouts are rounded.
-3.  **Intermediate Math**: Use high-precision rational arithmetic (e.g., `BigInt` or 256-bit fixed point) before the final rounding step.
+Investor payouts use floor-rounded pro-rata math. If a positive yield would
+otherwise leave an investor with principal only, the contract adds one token
+base unit as the minimum coupon. This avoids erasing a positive yield entirely
+for small positions. Consequently, the aggregate claim liability may exceed the
+nominal floor-rounded pool by at most one base unit per investor. Use
+`get_settlement_pool()` for the exact aggregate claim liability.
 
 ## 📝 Example Calculation
 
@@ -31,7 +32,7 @@ To ensure protocol solvency and prevent "penny-bleeding" attacks, integrators sh
 **Calculation:**
 1.  **Pro-rata Share**: $1,000 / 10,050 \approx 0.09950248756...$
 2.  **Gross Payout**: $0.09950248756 * 10,550 = 1,049.75124378...$
-3.  **Final Payout (USDC base units)**: `1,049.75` (assuming 2 decimals) or `104,975,124` (assuming 7 decimals, rounded down).
+3.  **Final Payout**: the base-unit floor, plus one unit only if this investor's fractional remainder is among the largest remainders selected for aggregate allocation.
 
 ## ⚠️ Security Notes
 
@@ -91,17 +92,13 @@ and authorization documentation.
 When all investors share the same `yield_bps`:
 
 ```
-settled_pool = total_principal + total_principal × yield_bps / 10_000   (floor)
-Σ payout_i  ≤ settled_pool
+nominal_pool = total_principal + floor(total_principal × yield_bps / 10_000)
+Σ payout_i ≤ nominal_pool + n_investors
 ```
 
-The inequality holds because floor division drops at most 1 unit per investor, so:
-
-```
-0 ≤ residue (= settled_pool − Σ payout_i) < n_investors
-```
-
-The residue is swept by the treasury via `sweep_terminal_dust` after all investors have claimed.
+The additional bound accounts for at most one minimum-coupon unit per investor.
+`get_settlement_pool()` returns the exact sum of investor payouts and is the
+authoritative funding target for claims.
 
 ### Tiered / mixed yield
 
@@ -109,32 +106,33 @@ When investors carry per-investor effective yields (from `fund_with_commitment` 
 each investor `i` has their own `settle_pool_i`:
 
 ```
-settle_pool_i = total_principal + total_principal × effective_yield_bps_i / 10_000
-payout_i      = contribution_i × settle_pool_i / total_principal   (floor)
+settle_pool_i = total_principal + floor(total_principal × effective_yield_bps_i / 10_000)
+payout_i      = floor(contribution_i × settle_pool_i / total_principal)
+if effective_yield_bps_i > 0 and payout_i == contribution_i:
+    payout_i += 1
 ```
 
-Because floor division always gives `payout_i ≤ exact_i`, summing across all investors:
+The minimum-coupon rule can add at most one base unit to each floor-rounded
+entitlement, so:
 
 ```
-Σ payout_i ≤ Σ exact_i = Σ (contribution_i × settle_pool_i / total_principal)
-           ≤ total_principal × (1 + max_effective_yield_bps / 10_000)
+Σ payout_i ≤ Σ exact_i + n_investors
+           ≤ total_principal × (1 + max_effective_yield_bps / 10_000) + n_investors
 ```
 
-> ⚠️ **The base-yield pool is not the tier-weighted pool.** The single `settled_pool`
+> ⚠️ **The nominal base-yield pool is not the tier-weighted pool.** The single `settled_pool`
 > quoted above (`total_principal + total_principal × yield_bps / 10_000`) is only valid
 > when every investor shares the same effective yield. Under mixed tiers it is a **lower
-> bound** on the real liability, and repaying only that amount leaves the contract
+> bound** on the real liability (and minimum-coupon units may increase it further), and repaying only that amount leaves the contract
 > under-funded for the last claimants. `get_settlement_pool()` therefore returns the
-> **exact tier-weighted sum** `Σ payout_i`, not the base-yield figure — see
+> **exact aggregate sum** `Σ payout_i`, not the nominal base-yield figure — see
 > [On-Chain Aggregate View](#-on-chain-aggregate-view-get_settlement_pool).
 
 ### Rounding guarantee
 
-Rounding always favors the contract, never the investors collectively:
-
-- No individual investor receives more than their exact rational entitlement.
-- The aggregate can never exceed the exact weighted sum of entitlements.
-- The residue is always non-negative — no shortfall is possible from rounding.
+Floor rounding favors the contract; the one-base-unit minimum coupon intentionally
+favors each investor whose positive yield would otherwise be rounded away. The
+aggregate claim liability remains exactly queryable through `get_settlement_pool()`.
 
 ### Snapshot-denominator consistency
 
@@ -151,17 +149,17 @@ and after every individual payout call and asserts identity.
 
 | Test | Coverage |
 |------|----------|
-| `prop_payout_sum_le_settle_pool` | Uniform yield, 2–6 investors, arbitrary amounts & yield |
+| `prop_payout_sum_le_settle_pool` | Uniform yield, 2–6 investors, arbitrary amounts & yield; exact pool conservation |
 | `prop_aggregate_payout_le_settle_pool_tiered` | Tiered/mixed yield, snapshot consistency, max-pool bound |
 | `payout_single_investor_equals_settle_pool` | Single investor receives exact `settle_pool` |
-| `payout_equal_split_conservation` | Equal contributions, sum ≤ `settle_pool` |
+| `payout_equal_split_conservation` | Equal contributions, minimum-coupon aggregate bound |
 | `payout_zero_yield_returns_principal_only` | Zero yield: `payout_i == contribution_i` |
 | `payout_max_yield_conservation` | 100% yield: conservation still holds |
-| `payout_prime_denominator_residue_bounded` | Prime total → residue < `n_investors` |
+| `payout_prime_denominator_residue_bounded` | Prime total, largest-remainder conservation |
 | `payout_highly_skewed_contributions` | 99%/1% split; residue bounded |
-| `payout_many_small_investors_conservation` | 8 investors × 1 unit; aggregate ≤ `settle_pool` |
+| `payout_many_small_investors_conservation` | 8 investors × 1 unit; minimum coupon per investor |
 | `payout_single_large_single_tiny` | Extreme asymmetry stress test |
-| `payout_tiered_mixed_yield_conservation` | 3-tier mixed yield; per-investor & aggregate bounds |
+| `payout_tiered_mixed_yield_conservation` | 3-tier mixed yield; per-investor & exact aggregate allocation |
 | `snapshot_denominator_consistent_across_all_payout_reads` | Snapshot immutable across all reads |
 | `fuzz_payout_conservation_multi_investor` | 64-case fuzz, 1–8 investors, full yield range |
 
@@ -199,42 +197,39 @@ entirely on-chain by enumerating the recorded investor set ([`DataKey::InvestorI
 summing each investor's own effective-yield payout:
 
 ```text
-settle_pool_i = total_principal + total_principal × effective_yield_bps_i / 10_000
-payout_i      = contribution_i × settle_pool_i / total_principal   (floor)
+settle_pool_i = total_principal + floor(total_principal × effective_yield_bps_i / 10_000)
+base_i        = floor(contribution_i × settle_pool_i / total_principal)
+payout_i      = base_i + largest_remainder_adjustment_i
 
 get_settlement_pool() = Σ_i payout_i
 ```
 
-Each term is byte-for-byte the same floored integer `compute_investor_payout` returns, so the
-aggregate **cannot under-fund** any claim, no matter how the tiers are distributed.
+The per-investor base amounts are floored, then `floor(sum(remainder_i) / total_principal)`
+additional base units are distributed to the largest remainders (funding order breaks ties).
+Therefore the sum exactly matches the aggregate liability rounded down once.
 
 ### Why this view exists
 
-`compute_investor_payout` derives a *per-investor* share. SME repayment tooling and
-dashboards previously had to re-derive `total_principal × yield_bps / 10_000` off-chain,
-risking a rounding divergence from the on-chain math. `get_settlement_pool` closes that gap
-by exposing the authoritative aggregate in a single host invocation.
+`compute_investor_payout` derives a per-investor share, including any allocated remainder.
+SME repayment tooling and dashboards can use `get_settlement_pool` to read the authoritative
+aggregate in a single host invocation.
 
 ### Yield note: base-yield pool vs. tier-weighted pool
 
-`settle()` still computes its `settle_pool` (in both the `SettlementResult` return value and
-the `EscrowSettled` event payload) from the escrow **base yield** only:
+`settle()` computes its `settle_pool` in both `SettlementResult` and `EscrowSettled` from the
+aggregate investor liability:
 
 ```text
-settle_pool = funded_amount + floor(funded_amount × yield_bps / 10_000)
+settle_pool = get_settlement_pool()
 ```
 
-That value is **informational**. For an escrow whose investors sit at different tiers it is a
-**lower bound** on the real liability. Repayment tooling must use `get_settlement_pool()` —
-never the `settle` return value — to determine how much the SME owes.
-
-When every investor shares the same effective yield, the two agree exactly (up to the
-sub-unit floor residue that `sweep_terminal_dust` reclaims).
+For uniform yield this equals the standard base-yield pool. For mixed tiers it includes each
+investor's selected yield, and `settle()` verifies the contract balance covers the amount.
 
 ### Cost
 
 O(n) over [`DataKey::InvestorIndex`], which is hard-capped at `MAX_UNIQUE_INVESTORS` (10 000)
-by `fund_impl`. This is a read-only view and is not on the release path.
+by `fund_impl`. Both `settle()` and individual payout reads use this bounded calculation.
 
 ### Return value
 

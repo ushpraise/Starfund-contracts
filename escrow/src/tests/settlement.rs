@@ -23,7 +23,7 @@ use super::{
 };
 use crate::{
     EscrowError, EscrowSettled, InvoiceEscrow, StarfundEscrow, SettlementConfig,
-    SettlementReadiness, SettlementResult, SmeWithdrew, YieldTier,
+    SettlementBatchStatus, SettlementReadiness, SettlementResult, SmeWithdrew, YieldTier,
 };
 use soroban_sdk::{
     symbol_short,
@@ -80,9 +80,8 @@ fn setup_claim_env<'a>(
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     (client, token, contract_id, treasury)
 }
@@ -126,9 +125,8 @@ fn setup_funded_with_token<'a>(
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     // Mint tokens to investor so fund() can transfer them into the escrow.
     let investor = Address::generate(env);
@@ -391,9 +389,8 @@ fn test_claim_by_non_investor_panics() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     // Escrow settled but stranger never funded
     let investor = Address::generate(&env);
     client.fund(&investor, &1_000i128);
@@ -495,9 +492,8 @@ fn test_claim_blocked_until_commitment_ledger_time() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     client.fund_with_commitment(&inv, &1_000i128, &500u64);
     client.settle();
     client.claim_investor_payout(&inv);
@@ -602,9 +598,8 @@ fn test_cost_baseline_settle() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     client.fund(&investor, &TARGET);
     env.ledger().set_timestamp(50_001);
     let settled = client.settle();
@@ -656,9 +651,8 @@ fn settle_with_maturity_zero_succeeds_immediately() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     assert!(
         !client.has_maturity_lock(),
@@ -705,9 +699,8 @@ fn settle_one_second_before_maturity_traps_and_preserves_state() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     fund_to_target(&client, &env);
     let snapshot_before = client.get_funding_close_snapshot();
@@ -763,9 +756,8 @@ fn settle_at_maturity_succeeds() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     assert!(
         client.has_maturity_lock(),
@@ -861,19 +853,47 @@ fn claim_investor_payout_before_settle_panics() {
     client.claim_investor_payout(&investor);
 }
 
-/// An investor that did not participate cannot claim.
+/// An investor that did not participate cannot claim or receive a claimed marker.
 #[test]
-#[should_panic]
-fn claim_investor_payout_non_participant_panics() {
+fn claim_investor_payout_non_participant_has_no_side_effects() {
     let env = Env::default();
     let (client, admin, sme) = setup(&env);
-    env.mock_all_auths_allowing_non_root_auth();
-    env.mock_auths(&[]);
     default_init(&client, &env, &admin, &sme);
     settle_escrow(&client, &env);
 
     let stranger = Address::generate(&env);
-    client.claim_investor_payout(&stranger);
+    let event_count = env.events().all().events().len();
+    assert_contract_error(
+        client.try_claim_investor_payout(&stranger),
+        EscrowError::NoContributionToClaim,
+    );
+    assert!(!client.is_investor_claimed(&stranger));
+    assert_eq!(env.events().all().events().len(), event_count);
+}
+
+#[test]
+fn claim_investor_payout_after_full_unfund_has_no_side_effects() {
+    let env = Env::default();
+    let (client, token, _contract_id, _treasury) = setup_claim_env(&env, "UNFUNDED", 2_000, 800);
+    let quitter = Address::generate(&env);
+    let stayer = Address::generate(&env);
+    token.stellar.mint(&quitter, &1_000);
+    token.stellar.mint(&stayer, &2_000);
+
+    client.fund(&quitter, &1_000);
+    client.fund(&stayer, &1_000);
+    client.unfund(&quitter, &1_000);
+    client.fund(&stayer, &1_000);
+    client.settle();
+
+    assert_eq!(client.get_contribution(&quitter), 0);
+    let event_count = env.events().all().events().len();
+    assert_contract_error(
+        client.try_claim_investor_payout(&quitter),
+        EscrowError::NoContributionToClaim,
+    );
+    assert!(!client.is_investor_claimed(&quitter));
+    assert_eq!(env.events().all().events().len(), event_count);
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -910,9 +930,8 @@ fn test_sweep_terminal_dust_after_settle_transfers_to_treasury() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     let investor = Address::generate(&env);
     client.fund(&investor, &1_000i128);
     client.settle();
@@ -954,9 +973,8 @@ fn test_sweep_terminal_dust_after_withdraw_and_ledger_tick() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     let investor = Address::generate(&env);
     client.fund(&investor, &1_000i128);
     client.withdraw();
@@ -995,9 +1013,8 @@ fn test_sweep_rejected_when_open() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     client.fund(&investor, &1_000i128);
     client.settle();
     client.claim_investor_payout(&investor);
@@ -1028,9 +1045,8 @@ fn test_sweep_blocked_under_legal_hold() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     client.fund(&investor, &1_000i128);
     client.settle();
     client.set_legal_hold(&true, &0u32);
@@ -1063,9 +1079,8 @@ fn test_sweep_rejects_amount_above_dust_cap() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     client.fund(&investor, &1_000i128);
     // status == 1 (funded), not settled — must panic
     client.claim_investor_payout(&investor);
@@ -1097,9 +1112,8 @@ fn test_sweep_caps_at_contract_balance() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     client.fund(&investor, &1_000i128);
     client.settle();
     client.claim_investor_payout(&stranger); // must panic — no contribution
@@ -1134,9 +1148,8 @@ fn test_sweep_requires_treasury_auth() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     fund_to_target(&client, &env);
     client.settle();
     token
@@ -1178,9 +1191,8 @@ fn claim_investor_payout_succeeds_after_settle() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     client.fund(&investor, &TARGET);
     client.settle();
     token.stellar.mint(&contract_id, &10i128);
@@ -1365,9 +1377,8 @@ fn test_is_investor_claimed_false_before_any_claim() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     client.fund(&investor, &1_000i128);
     client.settle();
     assert!(!client.is_investor_claimed(&investor));
@@ -1399,9 +1410,8 @@ fn test_is_investor_claimed_returns_false_for_unfunded_address() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     client.fund(&investor, &1_000i128);
     client.settle();
     assert!(!client.is_investor_claimed(&stranger));
@@ -1576,8 +1586,12 @@ fn test_partial_settle_sme_happy_path() {
     let investor = Address::generate(&env);
     client.fund(&investor, &(TARGET / 2));
 
+    let invoice_id = client.get_escrow().invoice_id;
+    let ledger_timestamp = env.ledger().timestamp();
     // SME settles early
+    env.ledger().set_timestamp(1_234);
     client.partial_settle(&sme);
+    let events = env.events().all();
 
     let escrow = client.get_escrow();
     assert_eq!(
@@ -1585,6 +1599,8 @@ fn test_partial_settle_sme_happy_path() {
         "Status must be 1 (funded/settleable) after partial_settle"
     );
     assert_eq!(escrow.funded_amount, TARGET / 2);
+    assert_eq!(client.get_partial_settled_at(), Some(1_234));
+    assert_eq!(client.get_settled_at(), None);
 }
 
 #[test]
@@ -1781,9 +1797,8 @@ fn settle_rejects_insufficient_contract_balance() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     token.stellar.mint(&investor, &TARGET);
     client.fund(&investor, &TARGET);
@@ -1872,8 +1887,7 @@ fn settled_at_recorded_with_maturity() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
+
     );
     let investor = Address::generate(&env);
     sac_admin.mint(&investor, &TARGET);
@@ -1976,9 +1990,8 @@ fn test_commitment_lock_past_maturity_rejected() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     let inv = Address::generate(&env);
     assert_contract_error(
@@ -2024,9 +2037,8 @@ fn test_commitment_effective_yield_reflects_tier() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     token.stellar.mint(&inv, &5_000i128);
     client.fund_with_commitment(&inv, &5_000i128, &100u64);
@@ -2073,9 +2085,8 @@ fn test_is_settleable_funded_before_maturity() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     let investor = Address::generate(&env);
     token.stellar.mint(&investor, &TARGET);
     client.fund(&investor, &TARGET);
@@ -2114,9 +2125,8 @@ fn test_is_settleable_funded_exact_maturity() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     let investor = Address::generate(&env);
     token.stellar.mint(&investor, &TARGET);
     client.fund(&investor, &TARGET);
@@ -2155,9 +2165,8 @@ fn test_is_settleable_funded_after_maturity() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     let investor = Address::generate(&env);
     token.stellar.mint(&investor, &TARGET);
     client.fund(&investor, &TARGET);
@@ -2174,10 +2183,42 @@ fn test_is_settleable_legal_hold_active() {
     let (client, admin, sme) = setup(&env);
     default_init(&client, &env, &admin, &sme);
     fund_to_target(&client, &env);
-    client.set_legal_hold(&true);
+    client.set_legal_hold(&true, &0u32);
     assert!(
         !client.is_settleable(),
         "legal hold active is not settleable"
+    );
+}
+
+#[test]
+fn test_is_settleable_settlement_pause_active() {
+    let env = Env::default();
+    let (client, admin, sme) = setup(&env);
+    default_init(&client, &env, &admin, &sme);
+    fund_to_target(&client, &env);
+    client.set_paused(
+        &true,
+        &crate::PauseScope::Settlement,
+        &crate::PauseReason::Incident,
+    );
+
+    assert!(
+        !client.is_settleable(),
+        "settlement pause makes the escrow not settleable"
+    );
+}
+
+#[test]
+fn test_is_settleable_active_dispute() {
+    let env = Env::default();
+    let (client, admin, sme) = setup(&env);
+    default_init(&client, &env, &admin, &sme);
+    fund_to_target(&client, &env);
+    client.open_dispute(&admin);
+
+    assert!(
+        !client.is_settleable(),
+        "active dispute makes the escrow not settleable"
     );
 }
 
@@ -2252,7 +2293,7 @@ fn test_settlement_readiness_funded_but_held_blocks_ready() {
     default_init(&client, &env, &admin, &sme);
     fund_to_target(&client, &env);
 
-    client.set_legal_hold(&true);
+    client.set_legal_hold(&true, &0u32);
 
     let r = client.get_settlement_readiness();
     assert!(r.legal_hold_active);
@@ -2305,9 +2346,8 @@ fn test_settlement_readiness_maturity_gate_parity() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     fund_to_target(&client, &env);
 
     // Pre-maturity: not reached, not ready.
@@ -2396,7 +2436,7 @@ fn test_readiness_fields_funded_no_lock_with_hold() {
     let (client, admin, sme) = setup(&env);
     default_init(&client, &env, &admin, &sme);
     fund_to_target(&client, &env);
-    client.set_legal_hold(&true);
+    client.set_legal_hold(&true, &0u32);
     assert_readiness_matches_predicates(&env, &client);
 }
 
@@ -2430,9 +2470,8 @@ fn test_readiness_fields_pre_maturity() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     let investor = Address::generate(&env);
     token.stellar.mint(&investor, &TARGET);
     client.fund(&investor, &TARGET);
@@ -2469,9 +2508,8 @@ fn test_readiness_fields_at_maturity() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     let investor = Address::generate(&env);
     token.stellar.mint(&investor, &TARGET);
     client.fund(&investor, &TARGET);
@@ -2509,14 +2547,13 @@ fn test_readiness_fields_after_maturity_with_hold() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     let investor = Address::generate(&env);
     token.stellar.mint(&investor, &TARGET);
     client.fund(&investor, &TARGET);
     env.ledger().set_timestamp(maturity + 100);
-    client.set_legal_hold(&true);
+    client.set_legal_hold(&true, &0u32);
     assert_readiness_matches_predicates(&env, &client);
 }
 
@@ -2583,9 +2620,8 @@ fn test_settle_pool_principal_plus_coupon() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     // Fund exactly `principal` so funded_amount == funding_target == principal.
     let investor = Address::generate(&env);
@@ -2641,9 +2677,8 @@ fn test_settle_pool_zero_yield() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     // Fund exactly `principal` so funded_amount == funding_target == principal.
     let investor = Address::generate(&env);
@@ -2697,9 +2732,8 @@ fn test_settle_pool_rounding_floor() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     // Fund exactly `principal` so funded_amount == funding_target == principal.
     let investor = Address::generate(&env);
@@ -2761,9 +2795,8 @@ fn test_settle_pool_large_principal() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     // Fund exactly `principal` so funded_amount == funding_target == principal.
     let investor = Address::generate(&env);
@@ -2819,9 +2852,8 @@ fn test_settle_pool_max_yield() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     // Fund exactly `principal` so funded_amount == funding_target == principal.
     let investor = Address::generate(&env);
@@ -2876,9 +2908,8 @@ fn test_settle_pool_no_maturity() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     // Fund exactly `principal` so funded_amount == funding_target == principal.
     let investor = Address::generate(&env);
@@ -2940,9 +2971,8 @@ fn settlement_result_fields_match_computed_values() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     fund_to_target(&client, &env);
     env.ledger().set_timestamp(1);
@@ -3000,9 +3030,8 @@ fn settlement_result_zero_yield() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     fund_to_target(&client, &env);
     env.ledger().set_timestamp(1);
@@ -3047,9 +3076,8 @@ fn settlement_result_settled_at_matches_ledger() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     fund_to_target(&client, &env);
     let timestamp = maturity + 1;
@@ -3099,9 +3127,8 @@ fn settlement_result_coupon_plus_funded_equals_pool() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     fund_to_target(&client, &env);
     env.ledger().set_timestamp(1);
@@ -3144,9 +3171,8 @@ fn settlement_result_pool_matches_get_settlement_pool() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     fund_to_target(&client, &env);
     env.ledger().set_timestamp(1);
@@ -3158,6 +3184,41 @@ fn settlement_result_pool_matches_get_settlement_pool() {
         result.settle_pool, pool_view,
         "SettlementResult.settle_pool must match get_settlement_pool()"
     );
+}
+
+#[test]
+fn settle_batch_reports_failures_and_continues_settling() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (first, first_token, first_id, _) = setup_claim_env(&env, "BATCHFIRST", TARGET, 0);
+    let (last, last_token, last_id, _) = setup_claim_env(&env, "BATCHLAST", TARGET, 0);
+    for (client, token) in [(&first, &first_token), (&last, &last_token)] {
+        let investor = Address::generate(&env);
+        token.stellar.mint(&investor, &TARGET);
+        client.fund(&investor, &TARGET);
+    }
+    let executor = deploy(&env);
+    let uninitialized_id = super::deploy_id(&env);
+    let escrows = soroban_sdk::vec![&env, first_id, uninitialized_id, last_id];
+
+    let outcomes = executor.settle_batch(&escrows);
+
+    assert_eq!(outcomes.len(), 3);
+    assert_eq!(
+        outcomes.get(0).unwrap().status,
+        SettlementBatchStatus::Settled
+    );
+    assert_eq!(
+        outcomes.get(1).unwrap().status,
+        SettlementBatchStatus::FailedContract(EscrowError::EscrowNotInitialized as u32)
+    );
+    assert_eq!(
+        outcomes.get(2).unwrap().status,
+        SettlementBatchStatus::Settled
+    );
+    assert_eq!(first.get_escrow().status, 2);
+    assert_eq!(last.get_escrow().status, 2);
 }
 
 /// `SettlementResult.escrow` snapshot must have status == 2 and correct maturity.
@@ -3191,9 +3252,8 @@ fn settlement_result_escrow_snapshot_fields() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     fund_to_target(&client, &env);
     env.ledger().set_timestamp(maturity);
@@ -3237,9 +3297,8 @@ fn settlement_result_large_values_no_overflow() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     let investor = Address::generate(&env);
     client.fund(&investor, &principal);
@@ -3310,9 +3369,8 @@ fn settlement_config_reflects_init_values() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     let config = client.get_settlement_config();
 
@@ -3410,9 +3468,8 @@ fn settlement_config_reflects_yield_tiers() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     let config = client.get_settlement_config();
     assert_eq!(config.yield_tiers.len(), 3);
@@ -3451,9 +3508,8 @@ fn settlement_config_reflects_maturity() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     let config = client.get_settlement_config();
     assert_eq!(config.maturity, maturity);
@@ -3488,9 +3544,8 @@ fn settlement_config_is_pure_read_only() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     let before = client.get_settlement_config();
     let _ = client.get_settlement_config(); // call twice
@@ -3539,9 +3594,8 @@ fn setup_yield_bps_test<'a>(
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     (client, admin)
 }
@@ -3730,7 +3784,7 @@ fn update_yield_bps_fails_when_cancelled() {
     let env = Env::default();
     let (client, _admin) = setup_yield_bps_test(&env, "YLD_ST_03", 800);
 
-    client.cancel_funding();
+    client.cancel_funding(&0u32);
     assert_eq!(client.get_escrow().status, 4u32);
 
     assert_contract_error(
@@ -3876,16 +3930,13 @@ fn setup_tiered_pool<'a>(
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
+
     );
 
     (client, token, contract_id, treasury)
 }
 
-/// #94: with investors sitting at different yield tiers, the base-yield pool
-/// reported by `settle` under-states the real liability, while
-/// `get_settlement_pool()` must cover the sum of every tiered claim.
+/// Tier-weighted pool and per-investor claims use the same largest-remainder total.
 #[test]
 fn tiered_settlement_pool_covers_sum_of_investor_payouts() {
     let env = Env::default();
@@ -3912,27 +3963,27 @@ fn tiered_settlement_pool_covers_sum_of_investor_payouts() {
     // Funded: the close snapshot is taken here.
     assert_eq!(client.get_escrow().status, 1u32);
 
+    let pool = client.get_settlement_pool();
+    token.stellar.mint(&contract_id, &(pool - target));
     let result = client.settle();
     assert_eq!(result.escrow.status, 2u32);
 
-    let pool = client.get_settlement_pool();
     let payout_tier = client.compute_investor_payout(&inv_tier);
     let payout_base = client.compute_investor_payout(&inv_base);
+    let base_yield_pool = target + target * 800 / 10_000;
 
     assert!(
-        pool > result.settle_pool,
-        "tier-weighted pool ({pool}) must exceed the base-yield pool ({}) for a mixed-tier escrow",
-        result.settle_pool,
+        pool > base_yield_pool,
+        "tier-weighted pool ({pool}) must exceed base-yield pool ({base_yield_pool})",
     );
+    assert_eq!(result.settle_pool, pool);
     assert_eq!(
         pool,
         payout_tier + payout_base,
-        "get_settlement_pool must equal the exact sum of per-investor payouts",
+        "get_settlement_pool must equal the sum of per-investor payouts",
     );
 
     // Solvency: the SME repays exactly `pool`; both claims must be payable.
-    let extra = pool - target;
-    token.stellar.mint(&contract_id, &extra);
     assert_eq!(token.stellar.balance(&contract_id), pool);
 
     env.ledger().set_timestamp(200);
@@ -3977,17 +4028,22 @@ fn settlement_pool_unchanged_for_uniform_base_yield() {
 #[test]
 fn investor_payout_claimed_event_carries_payout_amount() {
     let env = Env::default();
+    let mut tiers = SorobanVec::new(&env);
+    tiers.push_back(YieldTier {
+        min_lock_secs: 100,
+        yield_bps: 900,
+    });
     let (client, token, contract_id, _treasury) =
-        setup_tiered_pool(&env, "PAYEVT", 1_000i128, 800i64, None);
+        setup_tiered_pool(&env, "PAYEVT", 1_000i128, 800i64, Some(tiers));
 
     let investor = Address::generate(&env);
     token.stellar.mint(&investor, &1_000i128);
-    client.fund(&investor, &1_000i128);
+    client.fund_with_commitment(&investor, &1_000i128, &100u64);
     client.settle();
 
     let pool = client.get_settlement_pool();
     token.stellar.mint(&contract_id, &(pool - 1_000i128));
-    env.ledger().set_timestamp(1);
+    env.ledger().set_timestamp(100);
 
     client.claim_investor_payout(&investor);
 
@@ -3996,12 +4052,14 @@ fn investor_payout_claimed_event_carries_payout_amount() {
         investor: investor.clone(),
         invoice_id: client.get_escrow().invoice_id,
         payout: pool,
+        effective_yield_bps: 900,
+        commitment_lock_secs: 100,
     }
     .to_xdr(&env, &contract_id);
 
     assert_eq!(
         env.events().all().events().last().unwrap().clone(),
         expected,
-        "InvestorPayoutClaimed must include the payout amount",
+        "InvestorPayoutClaimed must include payout, effective yield, and commitment lock",
     );
 }

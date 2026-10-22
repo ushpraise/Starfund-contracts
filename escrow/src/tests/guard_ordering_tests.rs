@@ -3,9 +3,12 @@
 
 use crate::{
     tests::{assert_contract_error, deploy, free_addresses, setup},
-    DataKey, EscrowError, StarfundEscrowClient,
+    DataKey, EscrowError, PauseReason, PauseScope, StarfundEscrowClient,
 };
-use soroban_sdk::{testutils::Address as _, Address, Env, String};
+use soroban_sdk::{
+    testutils::{Address as _, Ledger as _},
+    Address, Env, String,
+};
 
 /// Verify that fund_impl enforces the documented guard sequence.
 /// The actual order (issue #265) is:
@@ -35,9 +38,10 @@ fn test_fund_impl_guard_ordering_floor_after_investor_auth() {
         &500i64,
         &0u64,
         &token,
-        &Some(min_floor),
+        &None,
         &treasury,
         &None,
+        &Some(min_floor),
         &None,
         &None,
         &None,
@@ -45,8 +49,7 @@ fn test_fund_impl_guard_ordering_floor_after_investor_auth() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
+
     );
 
     let investor = Address::generate(&env);
@@ -95,12 +98,11 @@ fn test_fund_impl_guard_ordering_pause_before_auth() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     // Set operational pause
-    client.set_paused(&true, &0u32, &String::from_str(&env, "incident"));
+    client.set_paused(&true, &PauseScope::All, &PauseReason::Incident);
 
     let investor = Address::generate(&env);
     // Attempt to fund while paused
@@ -142,9 +144,8 @@ fn test_fund_impl_guard_ordering_decimal_scale_check() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     let investor = Address::generate(&env);
     // Without token_decimals set, any positive amount should pass decimal check.
@@ -183,9 +184,8 @@ fn test_fund_impl_guard_ordering_status_check() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     // Fund to close the escrow (status 0 -> 1)
     let investor1 = Address::generate(&env);
@@ -228,12 +228,11 @@ fn test_fund_impl_guard_ordering_legal_hold_check() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     // Activate legal hold
-    client.set_legal_hold(&true);
+    client.set_legal_hold(&true, &0u32);
 
     let investor = Address::generate(&env);
     // Attempt to fund while under legal hold
@@ -272,9 +271,8 @@ fn test_fund_impl_guard_ordering_dual_auth_investor_and_payer() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     let investor = Address::generate(&env);
     
@@ -317,9 +315,8 @@ fn test_fund_impl_guard_ordering_storage_writes_after_all_auth() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     let investor = Address::generate(&env);
     client.fund(&investor, &1_000_000i128);
@@ -350,16 +347,16 @@ fn test_fund_impl_guard_ordering_funding_deadline_check() {
         &token,
         &None,
         &treasury,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
         &Some(deadline),
         &None,
         &None,
-        &None,
-        &None,
-        &None,
-        &None,
-        &None,
-        &None::<i64>,
-        &None::<u32>,
+
     );
 
     // Advance ledger time past deadline
@@ -400,18 +397,17 @@ fn test_fund_impl_guard_ordering_allowlist_check() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     // Enable allowlist
-    client.set_allowlist_active(&true);
+    client.set_allowlist_active(&true, &0u32);
 
     let investor = Address::generate(&env);
     let non_allowlisted_investor = Address::generate(&env);
     
     // Allowlist the first investor only
-    client.set_investor_allowlisted(&investor, &true);
+    client.set_investor_allowlisted(&investor, &true, &0u32);
 
     // Non-allowlisted investor should be rejected
     assert_contract_error(

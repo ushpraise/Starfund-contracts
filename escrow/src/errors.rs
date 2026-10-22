@@ -1,0 +1,41 @@
+use soroban_sdk::contracterror;
+
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum EscrowError {
+    AlreadyInitialized = 1,
+    NotInitialized = 2,
+    Unauthorized = 3,
+    InvalidAmount = 4,
+    InvalidState = 5,
+    InsufficientBalance = 6,
+    MilestoneNotFound = 7,
+    MilestoneAlreadyReleased = 8,
+    InvalidMilestone = 9,
+    ContractPaused = 10,
+    InvalidToken = 11,
+    InvalidRecipient = 12,
+    DeadlineNotReached = 13,
+    DeadlinePassed = 14,
+    InvalidDeadline = 15,
+    Overflow = 16,
+    Underflow = 17,
+    InvalidFee = 18,
+    FeeTooHigh = 19,
+    InvalidThreshold = 20,
+    NotEnoughApprovals = 21,
+    AlreadyApproved = 22,
+    InvalidSigner = 23,
+    DuplicateSigner = 24,
+    InvalidSignature = 25,
+    PauseToggleLimitExceeded = 26,
+    PauseCooldownActive = 27,
+    InvalidPauseWindow = 28,
+    PayerRotationNotAllowed = 29,
+    InvalidPayer = 30,
+    AdminCancelled = 31,
+    EscrowExpired = 32,
+    EscrowNotExpired = 33,
+    InvalidExpiry = 34,
+}

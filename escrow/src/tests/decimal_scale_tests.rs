@@ -8,28 +8,124 @@
 //   5. token scale changes after funding — second funder is validated against the original scale
 
 use soroban_sdk::testutils::Address as _;
-use soroban_sdk::{Address, Env};
+use soroban_sdk::{
+    contract, contractimpl, symbol_short, token::TokenInterface, Address, Env, MuxedAddress,
+};
 
-use super::{deploy, install_stellar_asset_token};
+use super::{assert_contract_error, deploy, install_stellar_asset_token};
 use crate::{EscrowError, StarfundEscrow, MAX_INVOICE_AMOUNT};
+
+#[contract]
+struct DecimalScaleToken;
+
+#[contractimpl]
+impl TokenInterface for DecimalScaleToken {
+    fn balance(env: Env, id: Address) -> i128 {
+        env.storage().persistent().get(&id).unwrap_or(0)
+    }
+
+    fn transfer(env: Env, from: Address, to: MuxedAddress, amount: i128) {
+        from.require_auth();
+        let to = to.address();
+        let from_balance = Self::balance(env.clone(), from.clone());
+        let to_balance = Self::balance(env.clone(), to.clone());
+        env.storage()
+            .persistent()
+            .set(&from, &(from_balance - amount));
+        env.storage().persistent().set(&to, &(to_balance + amount));
+    }
+
+    fn allowance(_env: Env, _from: Address, _spender: Address) -> i128 {
+        0
+    }
+
+    fn approve(_env: Env, _from: Address, _spender: Address, _amount: i128, _exp: u32) {}
+
+    fn transfer_from(_env: Env, _spender: Address, _from: Address, _to: Address, _amount: i128) {}
+
+    fn burn(_env: Env, _from: Address, _amount: i128) {}
+
+    fn burn_from(_env: Env, _spender: Address, _from: Address, _amount: i128) {}
+
+    fn decimals(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&symbol_short!("dec"))
+            .unwrap_or(7)
+    }
+
+    fn name(env: Env) -> soroban_sdk::String {
+        soroban_sdk::String::from_str(&env, "ScaleToken")
+    }
+
+    fn symbol(env: Env) -> soroban_sdk::String {
+        soroban_sdk::String::from_str(&env, "SCALE")
+    }
+}
+
+fn mint_scale_token(env: &Env, token_id: &Address, investor: &Address, amount: i128) {
+    env.as_contract(token_id, || {
+        let balance: i128 = env.storage().persistent().get(investor).unwrap_or(0);
+        env.storage()
+            .persistent()
+            .set(investor, &(balance + amount));
+    });
+}
+
+#[test]
+fn init_rejects_token_decimals_that_differ_from_token_metadata() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let sat = install_stellar_asset_token(&env);
+    let client = deploy(&env);
+    let admin = Address::generate(&env);
+    let sme = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let mismatched_decimals = sat.token.decimals() + 1;
+
+    let result = client.try_init(
+        &admin,
+        &soroban_sdk::String::from_str(&env, "INV-DEC-MISMATCH"),
+        &sme,
+        &10_000_000,
+        &800i64,
+        &0u64,
+        &sat.id,
+        &None,
+        &treasury,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None::<i64>,
+        &Some(mismatched_decimals),
+    );
+
+    super::assert_contract_error(result, EscrowError::FundingTokenDecimalsMismatch);
+}
 
 // ---------------------------------------------------------------------------
 // Shared helper
 // ---------------------------------------------------------------------------
 
-/// Deploy a fresh escrow backed by a real SAC token and initialise it with
-/// `token_decimals`.  Returns `(client, investor_address, sac_admin_client)`.
+/// Deploy an escrow with a test token whose declared decimals match `token_decimals`.
+/// Returns `(client, investor_address, token_contract_id)`.
 fn deploy_with_scale<'a>(
     env: &'a Env,
     token_decimals: u32,
     target: i128,
-) -> (
-    crate::StarfundEscrowClient<'a>,
-    Address,
-    soroban_sdk::token::StellarAssetClient<'a>,
-) {
+) -> (crate::StarfundEscrowClient<'a>, Address, Address) {
     env.mock_all_auths();
-    let sat = install_stellar_asset_token(env);
+    let token_id = env.register(DecimalScaleToken, ());
+    env.as_contract(&token_id, || {
+        env.storage()
+            .instance()
+            .set(&symbol_short!("dec"), &token_decimals);
+    });
     let client = deploy(env);
 
     let admin = Address::generate(env);
@@ -43,7 +139,7 @@ fn deploy_with_scale<'a>(
         &target,
         &800i64,
         &0u64,
-        &sat.id,
+        &token_id,
         &None,
         &treasury,
         &None,
@@ -59,7 +155,41 @@ fn deploy_with_scale<'a>(
     );
 
     let investor = Address::generate(env);
-    (client, investor, sat.stellar)
+    (client, investor, token_id)
+}
+
+#[test]
+fn decimal_scale_init_rejects_values_above_eighteen() {
+    for decimals in [19, u32::MAX] {
+        let env = Env::default();
+        env.mock_all_auths();
+        let client = deploy(&env);
+
+        assert_contract_error(
+            client.try_init(
+                &Address::generate(&env),
+                &soroban_sdk::String::from_str(&env, "INV-DS-INVALID"),
+                &Address::generate(&env),
+                &1_000i128,
+                &800i64,
+                &0u64,
+                &Address::generate(&env),
+                &None,
+                &Address::generate(&env),
+                &None,
+                &None,
+                &None,
+                &None,
+                &None,
+                &None,
+                &None,
+                &None,
+                &None::<i64>,
+                &Some(decimals),
+            ),
+            EscrowError::FundingTokenDecimalsOutOfRange,
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -74,8 +204,8 @@ fn decimal_scale_zero_decimals_any_integer_is_valid() {
     env.mock_all_auths();
 
     // target slightly above the fund amount so escrow stays open
-    let (client, investor, sac) = deploy_with_scale(&env, 0, 1_000_001);
-    sac.mint(&investor, &1_000_000);
+    let (client, investor, token_id) = deploy_with_scale(&env, 0, 1_000_001);
+    mint_scale_token(&env, &token_id, &investor, 1_000_000);
     // Any integer — including odd amounts — is representable with 0 decimals
     client.fund(&investor, &1_000_000);
 
@@ -89,8 +219,8 @@ fn decimal_scale_zero_decimals_odd_amount_valid() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let (client, investor, sac) = deploy_with_scale(&env, 0, 10_000_000);
-    sac.mint(&investor, &777);
+    let (client, investor, token_id) = deploy_with_scale(&env, 0, 10_000_000);
+    mint_scale_token(&env, &token_id, &investor, 777);
     client.fund(&investor, &777);
 
     assert_eq!(client.get_escrow().funded_amount, 777);
@@ -107,8 +237,8 @@ fn decimal_scale_too_many_fractional_digits_rejected() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let (client, investor, sac) = deploy_with_scale(&env, 2, 10_000_000);
-    sac.mint(&investor, &151);
+    let (client, investor, token_id) = deploy_with_scale(&env, 2, 10_000_000);
+    mint_scale_token(&env, &token_id, &investor, 151);
 
     let result = client.try_fund(&investor, &151);
     assert!(
@@ -140,15 +270,15 @@ fn decimal_scale_6_decimals_sub_unit_rejected() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let (client, investor, sac) = deploy_with_scale(&env, 6, 100_000_000);
-    sac.mint(&investor, &1_000_001);
+    let (client, investor, token_id) = deploy_with_scale(&env, 6, 100_000_000);
+    mint_scale_token(&env, &token_id, &investor, 1_000_001);
 
     // 1_000_001 is not a multiple of 10^6 = 1_000_000
     let bad = client.try_fund(&investor, &1_000_001);
     assert!(bad.is_err());
 
     // 1_000_000 is an exact multiple — must succeed
-    sac.mint(&investor, &1_000_000); // already has 1_000_001, mint more to have enough
+    mint_scale_token(&env, &token_id, &investor, 1_000_000);
     client.fund(&investor, &1_000_000);
     assert_eq!(client.get_escrow().funded_amount, 1_000_000);
 }
@@ -160,8 +290,8 @@ fn decimal_scale_exact_multiple_valid() {
     env.mock_all_auths();
 
     // 2 decimals → divisor 100; amount 500 = 5.00 tokens → valid
-    let (client, investor, sac) = deploy_with_scale(&env, 2, 10_000_000);
-    sac.mint(&investor, &500);
+    let (client, investor, token_id) = deploy_with_scale(&env, 2, 10_000_000);
+    mint_scale_token(&env, &token_id, &investor, 500);
     client.fund(&investor, &500);
     assert_eq!(client.get_escrow().funded_amount, 500);
 }
@@ -178,8 +308,8 @@ fn decimal_scale_max_amount_zero_decimals_valid() {
     env.mock_all_auths();
 
     // Use a target equal to MAX_INVOICE_AMOUNT so the escrow accepts the full amount.
-    let (client, investor, sac) = deploy_with_scale(&env, 0, MAX_INVOICE_AMOUNT);
-    sac.mint(&investor, &MAX_INVOICE_AMOUNT);
+    let (client, investor, token_id) = deploy_with_scale(&env, 0, MAX_INVOICE_AMOUNT);
+    mint_scale_token(&env, &token_id, &investor, MAX_INVOICE_AMOUNT);
     client.fund(&investor, &MAX_INVOICE_AMOUNT);
 
     assert_eq!(client.get_escrow().funded_amount, MAX_INVOICE_AMOUNT);
@@ -194,8 +324,8 @@ fn decimal_scale_max_amount_rounded_to_scale_valid() {
 
     // Largest multiple of 10 ≤ MAX_INVOICE_AMOUNT
     let valid_max = (MAX_INVOICE_AMOUNT / 10) * 10;
-    let (client, investor, sac) = deploy_with_scale(&env, 1, MAX_INVOICE_AMOUNT);
-    sac.mint(&investor, &valid_max);
+    let (client, investor, token_id) = deploy_with_scale(&env, 1, MAX_INVOICE_AMOUNT);
+    mint_scale_token(&env, &token_id, &investor, valid_max);
     client.fund(&investor, &valid_max);
 
     assert_eq!(client.get_escrow().funded_amount, valid_max);
@@ -212,7 +342,7 @@ fn decimal_scale_zero_amount_rejected_before_scale_check() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let (client, investor, _sac) = deploy_with_scale(&env, 2, 10_000_000);
+    let (client, investor, _token_id) = deploy_with_scale(&env, 2, 10_000_000);
 
     let result = client.try_fund(&investor, &0);
     match result {
@@ -237,7 +367,7 @@ fn decimal_scale_negative_amount_rejected_before_scale_check() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let (client, investor, _sac) = deploy_with_scale(&env, 2, 10_000_000);
+    let (client, investor, _token_id) = deploy_with_scale(&env, 2, 10_000_000);
 
     let result = client.try_fund(&investor, &-1);
     match result {
@@ -275,16 +405,16 @@ fn decimal_scale_second_funder_validated_against_stored_scale() {
 
     // 2 decimals → divisor 100
     // Target is large enough for two funders
-    let (client, investor1, sac) = deploy_with_scale(&env, 2, 10_000_000);
+    let (client, investor1, token_id) = deploy_with_scale(&env, 2, 10_000_000);
 
     // First investor funds a valid amount (500 = multiple of 100)
-    sac.mint(&investor1, &500);
+    mint_scale_token(&env, &token_id, &investor1, 500);
     client.fund(&investor1, &500);
     assert_eq!(client.get_escrow().funded_amount, 500);
 
     // Second investor attempts an amount with too many fractional digits (501 % 100 == 1)
     let investor2 = Address::generate(&env);
-    sac.mint(&investor2, &501);
+    mint_scale_token(&env, &token_id, &investor2, 501);
 
     let bad = client.try_fund(&investor2, &501);
     match bad {
@@ -313,7 +443,7 @@ fn decimal_scale_second_funder_validated_against_stored_scale() {
     );
 
     // Second investor with a valid amount (600 = multiple of 100) succeeds
-    sac.mint(&investor2, &600);
+    mint_scale_token(&env, &token_id, &investor2, 600);
     client.fund(&investor2, &600);
     assert_eq!(client.get_escrow().funded_amount, 1100);
 }
@@ -350,9 +480,8 @@ fn decimal_scale_no_token_decimals_skips_validation() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     let investor = Address::generate(&env);
     // Amount with fractional remainder that would fail under 2-decimal scale

@@ -47,6 +47,13 @@ All entrypoints share a common error surface with entrypoint-specific additions.
 | 110 | `FundedAmountOverflow` | `funded_amount + amount` overflows `i128` | ⚠️ Arithmetic Guard |
 | 111 | `CommitmentLockExceedsMaturity` | `claim_not_before > maturity` | ❌ Client Error |
 
+### Token Decimal Validation (130, 268)
+
+| Code | Error Variant | When Fired | Severity |
+|------|---------------|------------|----------|
+| 130 | `FundingTokenScaleInvalid` | `amount` is not exactly representable at the configured token scale | ❌ Client Error |
+| 268 | `FundingTokenDecimalsMismatch` | `init` configures a scale different from the funding token's SEP-41 `decimals()` value | ❌ Configuration Error |
+
 ### State & Status Guards (102-104, 164, 210, 220-222)
 
 | Code | Error Variant | When Fired | Severity |
@@ -305,6 +312,25 @@ if escrow.maturity > 0 {
 ```
 
 ---
+
+### Code 130: `FundingTokenScaleInvalid`
+
+**Entrypoints:** `fund`, `fund_with_commitment`, `fund_batch`
+
+**Trigger:** The amount cannot be represented exactly at the token scale configured during
+`init`.
+
+**Client Fix:** Submit an amount aligned to the configured token scale.
+
+### Code 268: `FundingTokenDecimalsMismatch`
+
+**Entrypoints:** `init`
+
+**Trigger:** `token_decimals` is supplied but differs from the funding token's SEP-41
+`decimals()` value.
+
+**Client Fix:** Configure the token's reported decimals, or omit `token_decimals` to disable
+the optional scale check.
 
 ### Code 164: `FundingDeadlinePassed`
 

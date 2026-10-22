@@ -108,9 +108,8 @@ fn do_init(
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 }
 
 // ── get_investors ─────────────────────────────────────────────────────────────
@@ -181,9 +180,8 @@ fn get_investors_first_page() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     // Fund with 5 investors
     let mut investors = soroban_sdk::Vec::new(&env);
@@ -234,9 +232,8 @@ fn get_investors_continuation_page() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     let mut investors = soroban_sdk::Vec::new(&env);
     for _ in 0..5 {
@@ -285,9 +282,8 @@ fn get_investors_start_past_end_returns_empty() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     let inv = Address::generate(&env);
     sac_admin.mint(&inv, &200_000_000i128);
@@ -322,9 +318,8 @@ fn setup_allowlist_escrow(env: &Env) -> (crate::StarfundEscrowClient<'_>, Addres
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     (client, admin, sme)
 }
 
@@ -343,7 +338,7 @@ fn get_allowlisted_investors_zero_limit_returns_empty() {
     env.mock_all_auths();
     let (client, admin, _sme) = setup_allowlist_escrow(&env);
     let inv = Address::generate(&env);
-    client.set_investor_allowlisted(&inv, &true);
+    client.set_investor_allowlisted(&inv, &true, &0u32);
     let result = client.get_allowlisted_investors(&0, &0);
     assert_eq!(result.len(), 0);
 }
@@ -354,7 +349,7 @@ fn get_allowlisted_investors_start_past_end_returns_empty() {
     env.mock_all_auths();
     let (client, admin, _sme) = setup_allowlist_escrow(&env);
     let inv = Address::generate(&env);
-    client.set_investor_allowlisted(&inv, &true);
+    client.set_investor_allowlisted(&inv, &true, &0u32);
     // Only 1 investor; start=5 is past the end
     let result = client.get_allowlisted_investors(&5, &10);
     assert_eq!(result.len(), 0);
@@ -369,7 +364,7 @@ fn get_allowlisted_investors_first_page() {
     let mut addrs = soroban_sdk::Vec::new(&env);
     for _ in 0..5 {
         let addr = Address::generate(&env);
-        client.set_investor_allowlisted(&addr, &true);
+        client.set_investor_allowlisted(&addr, &true, &0u32);
         addrs.push_back(addr);
     }
 
@@ -389,7 +384,7 @@ fn get_allowlisted_investors_continuation_page() {
     let mut addrs = soroban_sdk::Vec::new(&env);
     for _ in 0..5 {
         let addr = Address::generate(&env);
-        client.set_investor_allowlisted(&addr, &true);
+        client.set_investor_allowlisted(&addr, &true, &0u32);
         addrs.push_back(addr);
     }
 
@@ -409,12 +404,12 @@ fn get_allowlisted_investors_excludes_revoked_addresses() {
     let addr_a = Address::generate(&env);
     let addr_b = Address::generate(&env);
     let addr_c = Address::generate(&env);
-    client.set_investor_allowlisted(&addr_a, &true);
-    client.set_investor_allowlisted(&addr_b, &true);
-    client.set_investor_allowlisted(&addr_c, &true);
+    client.set_investor_allowlisted(&addr_a, &true, &0u32);
+    client.set_investor_allowlisted(&addr_b, &true, &0u32);
+    client.set_investor_allowlisted(&addr_c, &true, &0u32);
 
     // Revoke addr_b
-    client.set_investor_allowlisted(&addr_b, &false);
+    client.set_investor_allowlisted(&addr_b, &false, &0u32);
 
     // Full page scan should only return addr_a and addr_c
     let result = client.get_allowlisted_investors(&0, &10);
@@ -448,9 +443,8 @@ fn setup_attestation_escrow(env: &Env) -> (crate::StarfundEscrowClient<'_>, Addr
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     (client, admin)
 }
 
@@ -562,4 +556,126 @@ fn get_revoked_attestation_digests_continuation_start() {
         result.get(1).unwrap().digest,
         soroban_sdk::BytesN::from_array(&env, &[3u8; 32])
     );
+}
+
+// ── Issue #236: get_attestation_digests — harmonized pagination validation ────
+//
+// After the fix, get_attestation_digests enforces strict limit bounds identical
+// to get_revoked_attestation_digests: limit == 0 → AttestationReadLimitZero,
+// limit > MAX_ATTESTATION_READ_PAGE → AttestationReadLimitTooLarge. The old
+// silent-clamping and empty-vector-on-zero behavior is removed.
+
+/// `get_attestation_digests` with limit == 0 must revert with
+/// [`EscrowError::AttestationReadLimitZero`], matching `get_revoked_attestation_digests`.
+#[test]
+fn get_attestation_digests_zero_limit_returns_typed_error() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _admin) = setup_attestation_escrow(&env);
+
+    let digest = soroban_sdk::BytesN::from_array(&env, &[7u8; 32]);
+    client.append_attestation_digest(&digest);
+
+    let expected = crate::EscrowError::AttestationReadLimitZero as u32;
+    match client.try_get_attestation_digests(&0, &0) {
+        Err(Ok(error)) => assert_eq!(error, soroban_sdk::Error::from_contract_error(expected)),
+        Err(Err(soroban_sdk::InvokeError::Contract(code))) => assert_eq!(code, expected),
+        other => panic!("expected AttestationReadLimitZero, got {other:?}"),
+    }
+}
+
+/// `get_attestation_digests` with limit > MAX_ATTESTATION_READ_PAGE must revert
+/// with [`EscrowError::AttestationReadLimitTooLarge`], matching `get_revoked_attestation_digests`.
+#[test]
+fn get_attestation_digests_limit_too_large_returns_typed_error() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _admin) = setup_attestation_escrow(&env);
+
+    let digest = soroban_sdk::BytesN::from_array(&env, &[8u8; 32]);
+    client.append_attestation_digest(&digest);
+
+    // MAX_ATTESTATION_READ_PAGE + 1 must be rejected.
+    let over_limit = crate::MAX_ATTESTATION_READ_PAGE + 1;
+    let expected = crate::EscrowError::AttestationReadLimitTooLarge as u32;
+    match client.try_get_attestation_digests(&0, &over_limit) {
+        Err(Ok(error)) => assert_eq!(error, soroban_sdk::Error::from_contract_error(expected)),
+        Err(Err(soroban_sdk::InvokeError::Contract(code))) => assert_eq!(code, expected),
+        other => panic!("expected AttestationReadLimitTooLarge, got {other:?}"),
+    }
+}
+
+/// `get_attestation_digests` with a valid limit within bounds returns entries.
+#[test]
+fn get_attestation_digests_valid_limit_returns_entries() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _admin) = setup_attestation_escrow(&env);
+
+    // Append 3 digests.
+    for seed in 0u8..3 {
+        let digest = soroban_sdk::BytesN::from_array(&env, &[seed; 32]);
+        client.append_attestation_digest(&digest);
+    }
+
+    // Fetch all with limit = MAX_ATTESTATION_READ_PAGE — must succeed.
+    let result = client.get_attestation_digests(&0, &crate::MAX_ATTESTATION_READ_PAGE);
+    assert_eq!(result.len(), 3);
+}
+
+/// `get_attestation_digests` with limit exactly at MAX_ATTESTATION_READ_PAGE (boundary)
+/// must succeed.
+#[test]
+fn get_attestation_digests_limit_at_max_boundary_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _admin) = setup_attestation_escrow(&env);
+
+    let digest = soroban_sdk::BytesN::from_array(&env, &[9u8; 32]);
+    client.append_attestation_digest(&digest);
+
+    let result = client.get_attestation_digests(&0, &crate::MAX_ATTESTATION_READ_PAGE);
+    assert_eq!(result.len(), 1);
+}
+
+/// `get_attestation_digests` and `get_revoked_attestation_digests` must now enforce
+/// identical limit validation rules (symmetric boundary behaviour).
+#[test]
+fn get_attestation_digests_and_revoked_enforce_same_limit_rules() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _admin) = setup_attestation_escrow(&env);
+
+    let digest = soroban_sdk::BytesN::from_array(&env, &[10u8; 32]);
+    client.append_attestation_digest(&digest);
+    client.revoke_attestation_digests(&soroban_sdk::vec![&env, 0u32]);
+
+    let over = crate::MAX_ATTESTATION_READ_PAGE + 1;
+    let too_large = crate::EscrowError::AttestationReadLimitTooLarge as u32;
+
+    // Both must reject limit > MAX.
+    match client.try_get_attestation_digests(&0, &over) {
+        Err(Ok(e)) => assert_eq!(e, soroban_sdk::Error::from_contract_error(too_large)),
+        Err(Err(soroban_sdk::InvokeError::Contract(c))) => assert_eq!(c, too_large),
+        other => panic!("get_attestation_digests: expected TooLarge, got {other:?}"),
+    }
+    match client.try_get_revoked_attestation_digests(&0, &over) {
+        Err(Ok(e)) => assert_eq!(e, soroban_sdk::Error::from_contract_error(too_large)),
+        Err(Err(soroban_sdk::InvokeError::Contract(c))) => assert_eq!(c, too_large),
+        other => panic!("get_revoked_attestation_digests: expected TooLarge, got {other:?}"),
+    }
+
+    let zero_err = crate::EscrowError::AttestationReadLimitZero as u32;
+
+    // Both must reject limit == 0.
+    match client.try_get_attestation_digests(&0, &0) {
+        Err(Ok(e)) => assert_eq!(e, soroban_sdk::Error::from_contract_error(zero_err)),
+        Err(Err(soroban_sdk::InvokeError::Contract(c))) => assert_eq!(c, zero_err),
+        other => panic!("get_attestation_digests: expected Zero, got {other:?}"),
+    }
+    match client.try_get_revoked_attestation_digests(&0, &0) {
+        Err(Ok(e)) => assert_eq!(e, soroban_sdk::Error::from_contract_error(zero_err)),
+        Err(Err(soroban_sdk::InvokeError::Contract(c))) => assert_eq!(c, zero_err),
+        other => panic!("get_revoked_attestation_digests: expected Zero, got {other:?}"),
+    }
 }

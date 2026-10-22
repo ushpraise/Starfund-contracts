@@ -69,9 +69,8 @@ fn deploy(env: &Env, target: i128) -> (StarfundEscrowClient<'_>, Address) {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     (client, id)
 }
 

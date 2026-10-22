@@ -35,9 +35,8 @@ fn test_migration_version_mismatch() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     // stored = SCHEMA_VERSION (6), from_version = 5 → mismatch
     assert_contract_error(
@@ -74,9 +73,8 @@ fn test_already_current_schema_version() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     assert_contract_error(
         client.try_migrate(&SCHEMA_VERSION),
@@ -112,9 +110,8 @@ fn test_no_migration_path() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     // Set stored version to 1 so from_version=1 matches
     env.as_contract(&contract_id, || {

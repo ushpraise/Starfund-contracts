@@ -26,13 +26,15 @@ ledger containing your transaction.
 ```rust
 if escrow.maturity > 0 {
     let now = env.ledger().timestamp();
-    assert!(now >= escrow.maturity, "Escrow has not yet reached maturity");
+    ensure(&env, now >= escrow.maturity, EscrowError::MaturityNotReached);
 }
 ```
 
 - The comparison is `>=` (inclusive boundary).
 - When `maturity == 0`, the gate is skipped — no time lock.
 - Maturity is stored as a raw `u64` of seconds.
+- An early call fails with the typed contract error `EscrowError::MaturityNotReached`;
+  the contract does not use a string assertion panic for this gate.
 - `has_maturity_lock()` and `get_escrow_summary().has_maturity_lock`
   surface this explicitly: `false` means `maturity == 0` and settlement is
   not time-gated.
@@ -41,11 +43,16 @@ if escrow.maturity > 0 {
 
 ```rust
 let now = env.ledger().timestamp();
-assert!(now >= not_before, "Investor commitment lock not expired (ledger timestamp)");
+ensure(
+    &env,
+    now >= not_before,
+    EscrowError::InvestorCommitmentLockNotExpired,
+);
 ```
 
 Same `>=` semantics: the claim is allowed at exactly `not_before`,
-not one second after.
+not one second after. An early claim fails with the typed contract error
+`EscrowError::InvestorCommitmentLockNotExpired`, not a string assertion panic.
 
 `not_before` is computed at fund time as:
 
@@ -127,9 +134,9 @@ env.storage().instance().set(&key, &true);
 
 | # | Invariant |
 |---|-----------|
-| I-1 | A claim before `not_before` panics with `"Investor commitment lock not expired (ledger timestamp)"` |
+| I-1 | A claim before `not_before` fails with `EscrowError::InvestorCommitmentLockNotExpired` |
 | I-2 | The first post-lock claim emits exactly **one** `InvestorPayoutClaimed` event |
-| I-3 | Every subsequent call for the same investor emits **zero** events and does not panic |
+| I-3 | Every subsequent call for the same investor emits **zero** events and succeeds without changing state |
 | I-4 | The gate boundary is inclusive (`now >= not_before`): the claim succeeds at exactly `deposit_ts + committed_lock_secs` |
 | I-5 | Per-investor claim keys are independent: investor A's idempotent repeat calls do not affect investor B's unclaimed state |
 
@@ -168,12 +175,10 @@ env.ledger().set_timestamp(deposit_ts);
 client.fund_with_commitment(&inv, &1_000i128, &lock_secs);
 client.settle();
 
-// One second before expiry → must panic
+// One second before expiry → typed contract error
 env.ledger().set_timestamp(not_before - 1);
-let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-    client.claim_investor_payout(&inv);
-}));
-assert!(r.is_err());
+let r = client.try_claim_investor_payout(&inv);
+assert_contract_error(r, EscrowError::InvestorCommitmentLockNotExpired);
 
 // Exactly at expiry → must succeed (inclusive boundary)
 env.ledger().set_timestamp(not_before);
@@ -188,12 +193,15 @@ client.claim_investor_payout(&inv);
 assert_eq!(env.events().all().len(), count);
 ```
 
+`assert_contract_error` is the escrow test suite's helper for checking the
+typed contract error returned by a generated `try_` client call.
+
 ### Example: Testing the Maturity Boundary
 
 ```rust
 // Escrow initialized with maturity = 5000
 env.ledger().set_timestamp(4999); // with_mut variant also valid
-// settle() panics — one second before maturity
+// settle() fails with EscrowError::MaturityNotReached — one second before maturity
 
 env.ledger().set_timestamp(5000);
 // settle() succeeds — exactly at maturity
@@ -249,13 +257,14 @@ Maturity can only be changed while the escrow is **Open** (status == 0):
 
 | Status | `update_maturity` result |
 |--------|--------------------------|
-| 0 — Open | ✅ Allowed (if `new_maturity != old_maturity`, else panics: `MaturityUnchanged`) |
-| 1 — Funded | ❌ Panics: "Maturity can only be updated in Open state" |
-| 2 — Settled | ❌ Panics: "Maturity can only be updated in Open state" |
-| 3 — Withdrawn | ❌ Panics: "Maturity can only be updated in Open state" |
+| 0 — Open | ✅ Allowed (if `new_maturity != old_maturity`; otherwise `MaturityUnchanged`) |
+| 1 — Funded | ❌ `MaturityUpdateNotOpen` |
+| 2 — Settled | ❌ `MaturityUpdateNotOpen` |
+| 3 — Withdrawn | ❌ `MaturityUpdateNotOpen` |
 
 This prevents retroactive maturity changes after investors have
-committed funds.
+committed funds. The same typed-error behavior applies when the new value is
+unchanged (`EscrowError::MaturityUnchanged`) or outside the validated bounds.
 
 ## `update_funding_deadline` — Open State Only
 
@@ -265,10 +274,10 @@ and the current deadline has not elapsed:
 | Status | `extend_funding_deadline` result |
 |--------|----------------------------------|
 | 0 — Open | ✅ Allowed |
-| 1 — Funded | ❌ Panics: "Funding deadline can only be updated in Open state" |
-| 2 — Settled | ❌ Panics: "Funding deadline can only be updated in Open state" |
-| 3 — Withdrawn | ❌ Panics: "Funding deadline can only be updated in Open state" |
-| 4 — Cancelled | ❌ Panics: "Funding deadline can only be updated in Open state" |
+| 1 — Funded | ❌ `FundingDeadlineUpdateNotOpen` |
+| 2 — Settled | ❌ `FundingDeadlineUpdateNotOpen` |
+| 3 — Withdrawn | ❌ `FundingDeadlineUpdateNotOpen` |
+| 4 — Cancelled | ❌ `FundingDeadlineUpdateNotOpen` |
 
 **Validation:**
 - A deadline must already exist.

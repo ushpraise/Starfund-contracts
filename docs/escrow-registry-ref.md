@@ -57,24 +57,25 @@ included in the `EscrowInitialized` snapshot event under the `registry` field.
 ### 2. Rebind
 
 ```
-rebind_registry_ref(registry: Option<Address>)
+rebind_registry_ref(registry: Option<Address>, expected_nonce: u32)
 ```
 
 - **Auth:** requires the signature of the current escrow admin.
-- **Effect:** writes `Some(addr)` to `DataKey::RegistryRef`, or removes the key
-  when passed `None`.
-- **Event:** emits `RegistryRefRebound { name: "reg_rebind", invoice_id, registry }`.
+- **Replay protection:** requires the current admin nonce and consumes it on success.
+- **Effect:** stores `addr` as an `Address` under `DataKey::RegistryRef`, or removes
+  the key when passed `None`.
+- **Event:** emits `RegistryRefRebound { name: "reg_rebd", invoice_id, registry }`.
 
-The pointer may be rebound any number of times and at any escrow status.
+The pointer may be rebound any number of times before funding begins.
 
 ### 3. Clear
 
 ```
-clear_registry_ref()
+clear_registry_ref(expected_nonce: u32)
 ```
 
-Convenience wrapper that calls `rebind_registry_ref(None)`. Behavior and
-emitted event are identical to passing `None` directly.
+Convenience wrapper that calls `rebind_registry_ref(None, expected_nonce)`.
+Behavior and emitted event are identical to passing `None` directly.
 
 ---
 
@@ -84,11 +85,11 @@ Every mutation via `rebind_registry_ref` (including `clear_registry_ref`) emits:
 
 | Field        | Type              | Description |
 |--------------|-------------------|-------------|
-| `name`       | `Symbol`          | Topic. Always `"reg_rebind"`. |
+| `name`       | `Symbol`          | Topic. Always `"reg_rebd"`. |
 | `invoice_id` | `Symbol`          | Topic. Identifies the escrow. |
 | `registry`   | `Option<Address>` | Data. New pointer value; `None` on clear. |
 
-Off-chain indexers should subscribe to the `reg_rebind` topic to re-sync their
+Off-chain indexers should subscribe to the `reg_rebd` topic to re-sync their
 cached pointer without polling the contract storage.
 
 See [`docs/escrow-events.md`](escrow-events.md) for the full event catalog and
@@ -114,7 +115,7 @@ whether this escrow is actually a member:
 
 ### Handling `RegistryRefRebound` events
 
-On receipt of a `reg_rebind` event:
+On receipt of a `reg_rebd` event:
 
 1. Update your locally cached pointer for this `invoice_id`.
 2. If the new value is `None`, mark the escrow as unregistered in your index.

@@ -46,6 +46,7 @@ re-implementing storage reads to guarantee identical semantics.
 
 **Per-Investor State:**
 - [get_contribution](#get_contributioninvestor-address--i128)
+- [get_total_deposited](#get_total_depositedinvestor-address--i128)
 - [get_unique_funder_count](#get_unique_funder_count--u32)
 - [get_investor_yield_bps](#get_investor_yield_bpsinvestor-address--i64)
 - [get_investor_claim_not_before](#get_investor_claim_not_beforeinvestor-address--u64)
@@ -122,6 +123,8 @@ Bundles multiple read-only values in a single host invocation, optimizing read l
 
 **Return value:** `EscrowSummary` struct containing:
 - `escrow: InvoiceEscrow` — Full escrow snapshot.
+- `status_classification: EscrowStatus` — Human-readable lifecycle state; unknown numeric
+  status codes are returned as `Unknown(code)` so migrations remain observable.
 - `has_maturity_lock: bool` — True when `escrow.maturity > 0`.
 - `legal_hold: bool` — True if compliance hold is active.
 - `funding_close_snapshot: EscrowCloseSnapshot` — Custom option-like enum (`None` or `Some(FundingCloseSnapshot)`).
@@ -580,11 +583,29 @@ and the internal `effective_yield_for_commitment` helper.
 **Storage key:** `DataKey::InvestorContribution(investor)` (persistent)  
 **Signature:** `pub fn get_contribution(env: Env, investor: Address) -> i128`
 
-Returns the cumulative principal contributed by `investor` in token base units.
+Returns the current net principal contributed by `investor` in token base units. Successful
+unfunds and refunds reduce this amount.
 
 **Requires initialization:** No  
 **Default when absent:** `0` (never contributed)  
 **Storage type:** Persistent (independent TTL per address; see ADR-007)
+
+---
+
+### `get_total_deposited(investor: Address) → i128`
+
+**Storage key:** `DataKey::InvestorTotalDeposited(investor)` (persistent)
+**Signature:** `pub fn get_total_deposited(env: Env, investor: Address) -> i128`
+
+Returns the gross sum of successful deposits made by `investor`. Unfunds, refunds, and
+withdrawals do not reduce this value.
+
+**Requires initialization:** No
+**Default when absent:** current `get_contribution(investor)` value
+**Storage type:** Persistent (independent TTL per address; see ADR-007)
+
+For positions stored before this key was introduced, the current contribution is the
+best available lower bound; earlier unfunds cannot be reconstructed on-chain.
 
 ---
 
@@ -606,13 +627,15 @@ return `0`, matching `get_contribution`.
 
 ### `get_unique_funder_count() → u32`
 
-**Storage key:** `DataKey::UniqueFunderCount`  
+**Derived from:** active non-zero contributions in `DataKey::InvestorIndex`
 **Signature:** `pub fn get_unique_funder_count(env: Env) -> u32`
 
-Returns the count of distinct investor addresses with non-zero contributions. Initialized to `0` at `init`.
+Returns the count of listed investor addresses whose current contribution is non-zero. The
+cached `DataKey::UniqueFunderCount` is not trusted by this view, so stale cache values do not
+affect the result.
 
-**Requires initialization:** No (but written as `0` at `init`)  
-**Default when absent:** `0`
+**Requires initialization:** No
+**Default when the investor index is absent:** `0`
 
 **Notes:** counts distinct chain accounts, not real-world persons (Sybil resistance is not a goal of this counter).
 
@@ -709,11 +732,9 @@ when negative.
 - Emits [`EscrowError::EscrowNotInitialized`] / [`EscrowError::FundingTokenNotSet`]
   only when the escrow has not been initialized.
 
-**Security note:** in settled (`2`) and withdrawn (`3`) states `distributed_principal`
-is `0` by design, so `outstanding_liability` reflects the full `funded_amount` and the
-reported `surplus` is never larger than what `sweep_terminal_dust` would actually
-permit (that guard only applies the floor in the cancelled state `4`). The view is
-therefore conservative and can never over-report sweepable funds.
+**Security note:** in withdrawn (`3`) and cancelled (`4`) states, `outstanding_liability`
+uses the same `DistributedPrincipal` floor as `sweep_terminal_dust`. In settled (`2`) state
+the view remains informational; the dust sweep does not apply this principal floor.
 
 ---
 
@@ -767,25 +788,31 @@ arises when off-chain tooling re-derives the formula from raw snapshot fields.
 **Storage keys:** `DataKey::FundingCloseSnapshot`, `DataKey::Escrow`, `DataKey::InvestorIndex`,
 `DataKey::InvestorContribution`, `DataKey::InvestorEffectiveYield`
 
-#### Formula (floor / truncating integer division)
+#### Formula (floor plus largest-remainder allocation)
 
 ```text
 settle_pool_i = total_principal + total_principal × effective_yield_bps_i / 10_000  (floor)
 payout_i      = contribution_i × settle_pool_i / total_principal   (floor)
+if effective_yield_bps_i > 0 and payout_i == contribution_i:
+    payout_i += 1
 
 get_settlement_pool() = Σ_i payout_i
 ```
+
+The extra base unit is the minimum coupon when positive yield would otherwise be rounded
+away for an investor. The aggregate view includes these units.
 
 Where `total_principal` is from `DataKey::FundingCloseSnapshot`, `contribution_i` from
 `DataKey::InvestorContribution`, and `effective_yield_bps_i` is the investor's tiered yield
 (`DataKey::InvestorEffectiveYield`) or the escrow base yield (`InvoiceEscrow::yield_bps`).
 
+Fractional remainders are ranked by size; equal remainders are resolved by `InvestorIndex`
+funding order. The settlement pool is the total rational liability rounded down once.
+
 #### Yield note
 
-The pool is **tier-weighted**, not base-yield. `settle()` still reports the base-yield figure
-(`funded_amount + floor(funded_amount × yield_bps / 10_000)`) in `SettlementResult` /
-`EscrowSettled`; that value is a **lower bound** on the real liability for mixed-tier escrows
-and is informational only. Repayment tooling must use this view.
+The pool is **tier-weighted**, not base-yield. `settle()` reports this same aggregate liability
+in `SettlementResult` / `EscrowSettled` and verifies that the escrow holds enough funding tokens.
 
 #### Return values
 
@@ -809,8 +836,8 @@ All multiplications use `i128::checked_mul`; divisions and the running sum use
 #### Rounding invariant
 
 `get_settlement_pool()` is the **exact** sum of all per-investor `compute_investor_payout`
-values, so the pool is never under-funded for tiered claims. Any sub-unit residue between
-`settle()`'s base-yield pool and this figure is reclaimed by `sweep_terminal_dust`.
+values, with the aggregate fractional remainders assigned by largest remainder and funding-order
+tie-break. `settle()` reports and checks this same liability.
 
 #### Authorization
 

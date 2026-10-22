@@ -229,9 +229,8 @@ fn setup_cancelled_with_token<'a>(
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     // Mint to investor so fund() can transfer principal into escrow
     token.stellar.mint(investor, &fund_amount);
     client.fund(investor, &fund_amount);
@@ -313,9 +312,8 @@ fn sweep_liability_floor_allows_sweep_of_excess_above_outstanding() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     // Mint 1001 into contract: 500 for A, 500 for B, 1 dust
     token.stellar.mint(&investor_a, &1_001i128);
@@ -364,9 +362,8 @@ fn sweep_liability_floor_blocks_sweep_that_would_eat_into_outstanding() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     token.stellar.mint(&investor_a, &1_001i128);
     client.fund(&investor_a, &500i128);
@@ -406,9 +403,8 @@ fn sweep_liability_floor_zero_funded_amount_allows_sweep() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     client.cancel_funding(&0u32);
 
     // Stray airdrop of 50 tokens
@@ -450,9 +446,8 @@ fn distributed_principal_accumulates_across_multiple_refunds() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     token.stellar.mint(&inv_a, &900i128);
     client.fund(&inv_a, &300i128);
@@ -510,16 +505,15 @@ fn setup_multi_investor_cancelled<'a>(
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     for i in 0..investors.len() {
         token.stellar.mint(&investors[i], &amounts[i]);
     }
     for i in 0..investors.len() {
         client.fund(&investors[i], &amounts[i]);
     }
-    client.cancel_funding();
+    client.cancel_funding(&0u32);
     (token, treasury)
 }
 
@@ -651,9 +645,8 @@ fn sweep_liability_floor_terminal_status_guard() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     client.sweep_terminal_dust(&1i128);
 }
 
@@ -667,7 +660,7 @@ fn sweep_liability_floor_legal_hold_blocks() {
     let (_token, _treasury) =
         setup_cancelled_with_token(&env, &client, &admin, &sme, &investor, 500i128);
 
-    client.set_legal_hold(&true);
+    client.set_legal_hold(&true, &0u32);
     client.sweep_terminal_dust(&1i128);
 }
 
@@ -750,13 +743,12 @@ fn reconciliation_surplus_equals_sweepable_dust_before_and_after_partial_refund(
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     token.stellar.mint(&investor_a, &1_001i128);
     client.fund(&investor_a, &500i128);
     client.fund(&investor_b, &500i128);
-    client.cancel_funding();
+    client.cancel_funding(&0u32);
 
     // Before any refund: outstanding = 1000, balance = 1001, surplus = 1.
     let before = client.get_reconciliation();
@@ -853,9 +845,8 @@ fn reconciliation_zero_balance_and_zero_liability() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     let view = client.get_reconciliation();
     assert_eq!(view.token_balance, 0i128);
@@ -942,6 +933,51 @@ fn sweep_terminal_dust_keeps_cancelled_status_and_preserves_refund_path() {
 
     client.refund(&investor);
     assert_eq!(client.get_distributed_principal(), fund_amount);
+}
+
+#[test]
+fn sweep_terminal_dust_preserves_undistributed_withdrawn_principal() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, escrow_id, sme) =
+        init_and_fund_with_real_token(&env, TARGET, "SWEEP_WITHDRAWN_FLOOR");
+    let token = TokenClient::new(&env, &client.get_funding_token());
+    let tranche = TARGET / 2;
+
+    token.transfer(&escrow_id, &MuxedAddress::from(sme), &tranche);
+    env.as_contract(&escrow_id, || {
+        let mut escrow = StarfundEscrow::get_escrow(env.clone());
+        escrow.status = 3;
+        env.storage().instance().set(&DataKey::Escrow, &escrow);
+        env.storage()
+            .instance()
+            .set(&DataKey::ReleasedAmount, &tranche);
+        env.storage()
+            .instance()
+            .set(&DataKey::DistributedPrincipal, &tranche);
+    });
+
+    assert_contract_error(
+        client.try_sweep_terminal_dust(&1i128),
+        EscrowError::SweepExceedsLiabilityFloor,
+    );
+}
+
+#[test]
+fn sweep_terminal_dust_after_partial_release_and_withdraw() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, escrow_id, _) =
+        init_and_fund_with_real_token(&env, TARGET, "SWEEP_RELEASE_WITHDRAW");
+    let tranche = TARGET / 2;
+
+    client.release(&tranche);
+    client.withdraw();
+    assert_eq!(client.get_distributed_principal(), TARGET);
+
+    let token = StellarAssetClient::new(&env, &client.get_funding_token());
+    token.mint(&escrow_id, &1i128);
+    assert_eq!(client.sweep_terminal_dust(&1i128), 1i128);
 }
 
 #[test]

@@ -84,10 +84,10 @@ fn batch_allowlist_persists_paged_index_and_count() {
 
     let batch: u32 = 5;
     let mut v: SorobanVec<Address> = SorobanVec::new(&env);
-    let mut expected = std::collections::HashSet::new();
+    let mut expected = SorobanVec::new(&env);
     for _ in 0..batch {
         let addr = Address::generate(&env);
-        expected.insert(addr.to_string());
+        expected.push_back(addr.to_string());
         v.push_back(addr);
     }
 
@@ -98,7 +98,8 @@ fn batch_allowlist_persists_paged_index_and_count() {
     let page = client.get_allowlisted_investors(&0, &50);
     assert_eq!(page.len(), batch);
     for i in 0..page.len() {
-        assert!(expected.contains(&page.get(i).unwrap().to_string()));
+        let item = page.get(i).unwrap().to_string();
+        assert!(expected.iter().any(|s| s == item));
     }
 }
 
@@ -187,7 +188,7 @@ fn paged_index_handles_500_allowlisted_addresses() {
     });
 
     // Full enumeration across every page returns each address exactly once.
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = SorobanVec::new(&env);
     let mut start: u32 = 0;
     loop {
         let page = client.get_allowlisted_investors(&start, &50);
@@ -196,9 +197,14 @@ fn paged_index_handles_500_allowlisted_addresses() {
             break;
         }
         for i in 0..len {
-            assert!(seen.insert(page.get(i).unwrap().to_string()));
+            let item = page.get(i).unwrap().to_string();
+            assert!(
+                !seen.iter().any(|s| s == item),
+                "duplicate allowlisted address found during enumeration"
+            );
+            seen.push_back(item);
         }
         start += len;
     }
-    assert_eq!(seen.len(), total as usize);
+    assert_eq!(seen.len(), total);
 }

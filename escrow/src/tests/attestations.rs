@@ -1173,3 +1173,358 @@ fn test_require_index_in_range_last_valid_index_at_max_capacity() {
         EscrowError::AttestationIndexOutOfRange,
     );
 }
+
+// ---------------------------------------------------------------------------
+// Issue #234: unrevoke_attestation_digests — batch unrevocation
+// ---------------------------------------------------------------------------
+
+/// Happy path: batch-unrevoke multiple revoked indices atomically.
+#[test]
+fn test_batch_unrevoke_multiple_indices() {
+    let env = Env::default();
+    let (client, _) = setup_with_init(&env);
+    for i in 0u8..5 {
+        client.append_attestation_digest(&digest(&env, i));
+    }
+    for i in 0u32..5 {
+        client.revoke_attestation_digest(&i);
+    }
+
+    let indices = soroban_sdk::vec![&env, 0u32, 2u32, 4u32];
+    client.unrevoke_attestation_digests(&indices);
+
+    assert!(!client.is_attestation_revoked(&0));
+    assert!(client.is_attestation_revoked(&1)); // untouched
+    assert!(!client.is_attestation_revoked(&2));
+    assert!(client.is_attestation_revoked(&3)); // untouched
+    assert!(!client.is_attestation_revoked(&4));
+}
+
+/// Batch unrevoke emits one `att_unrev` event per index.
+#[test]
+fn test_batch_unrevoke_emits_events_per_index() {
+    let env = Env::default();
+    let (client, _) = setup_with_init(&env);
+    for i in 0u8..3 {
+        client.append_attestation_digest(&digest(&env, i));
+        client.revoke_attestation_digest(&(i as u32));
+    }
+
+    // Clear event log before the call under test.
+    let pre_len = env.events().all().len();
+    let indices = soroban_sdk::vec![&env, 0u32, 1u32, 2u32];
+    client.unrevoke_attestation_digests(&indices);
+
+    let all_events = env.events().all();
+    // 3 att_unrev events should have been emitted.
+    assert!(all_events.len() >= pre_len + 3);
+}
+
+/// Empty indices vector panics with `AttestationBatchEmpty`.
+#[test]
+fn test_batch_unrevoke_empty_indices_fails() {
+    let env = Env::default();
+    let (client, _) = setup_with_init(&env);
+    let empty: soroban_sdk::Vec<u32> = soroban_sdk::vec![&env];
+    assert_contract_error(
+        client.try_unrevoke_attestation_digests(&empty),
+        EscrowError::AttestationBatchEmpty,
+    );
+}
+
+/// Too many indices panics with `AttestationBatchTooLarge`.
+#[test]
+fn test_batch_unrevoke_too_large_fails() {
+    let env = Env::default();
+    let (client, _) = setup_with_init(&env);
+
+    // Build a vec with MAX+1 entries.
+    let mut oversized: soroban_sdk::Vec<u32> = soroban_sdk::vec![&env];
+    for i in 0u32..=(MAX_ATTESTATION_REVOKE_BATCH) {
+        oversized.push_back(i);
+    }
+    assert_contract_error(
+        client.try_unrevoke_attestation_digests(&oversized),
+        EscrowError::AttestationBatchTooLarge,
+    );
+}
+
+/// Out-of-range index in batch returns `AttestationIndexOutOfRange` and rolls back atomically.
+#[test]
+fn test_batch_unrevoke_out_of_range_rolls_back() {
+    let env = Env::default();
+    let (client, _) = setup_with_init(&env);
+    client.append_attestation_digest(&digest(&env, 0x01));
+    client.revoke_attestation_digest(&0);
+
+    let indices = soroban_sdk::vec![&env, 0u32, 99u32]; // 99 is out of range
+    assert_contract_error(
+        client.try_unrevoke_attestation_digests(&indices),
+        EscrowError::AttestationIndexOutOfRange,
+    );
+    // Atomicity: index 0 must still be revoked.
+    assert!(client.is_attestation_revoked(&0));
+}
+
+/// Not-revoked index in batch returns `AttestationNotRevoked` and rolls back atomically.
+#[test]
+fn test_batch_unrevoke_not_revoked_index_rolls_back() {
+    let env = Env::default();
+    let (client, _) = setup_with_init(&env);
+    for i in 0u8..3 {
+        client.append_attestation_digest(&digest(&env, i));
+    }
+    client.revoke_attestation_digest(&0);
+    client.revoke_attestation_digest(&2);
+    // Index 1 is NOT revoked.
+
+    let indices = soroban_sdk::vec![&env, 0u32, 1u32]; // 1 not revoked → error
+    assert_contract_error(
+        client.try_unrevoke_attestation_digests(&indices),
+        EscrowError::AttestationNotRevoked,
+    );
+    // Atomicity: index 0 must still be revoked (batch rolled back).
+    assert!(client.is_attestation_revoked(&0));
+    assert!(client.is_attestation_revoked(&2));
+}
+
+/// Duplicate index in batch: second occurrence fails `AttestationNotRevoked` after first is removed.
+#[test]
+fn test_batch_unrevoke_duplicate_index_rolls_back() {
+    let env = Env::default();
+    let (client, _) = setup_with_init(&env);
+    client.append_attestation_digest(&digest(&env, 0xAA));
+    client.revoke_attestation_digest(&0);
+
+    let indices = soroban_sdk::vec![&env, 0u32, 0u32]; // duplicate
+    assert_contract_error(
+        client.try_unrevoke_attestation_digests(&indices),
+        EscrowError::AttestationNotRevoked,
+    );
+    // Atomicity: still revoked after rollback.
+    assert!(client.is_attestation_revoked(&0));
+}
+
+/// Non-admin caller cannot batch-unrevoke.
+#[test]
+fn test_batch_unrevoke_non_admin_fails() {
+    let env = Env::default();
+    let (client, _) = setup_with_init(&env);
+    client.append_attestation_digest(&digest(&env, 0xFF));
+    client.revoke_attestation_digest(&0);
+    env.mock_auths(&[]);
+    let indices = soroban_sdk::vec![&env, 0u32];
+    assert!(client.try_unrevoke_attestation_digests(&indices).is_err());
+}
+
+/// Exactly MAX_ATTESTATION_REVOKE_BATCH indices succeeds.
+#[test]
+fn test_batch_unrevoke_exactly_max_size_succeeds() {
+    let env = Env::default();
+    let (client, _) = setup_with_init(&env);
+    for i in 0u8..(MAX_ATTESTATION_REVOKE_BATCH as u8) {
+        client.append_attestation_digest(&digest(&env, i));
+        client.revoke_attestation_digest(&(i as u32));
+    }
+
+    let mut indices: soroban_sdk::Vec<u32> = soroban_sdk::vec![&env];
+    for i in 0u32..MAX_ATTESTATION_REVOKE_BATCH {
+        indices.push_back(i);
+    }
+    client.unrevoke_attestation_digests(&indices);
+
+    for i in 0u32..MAX_ATTESTATION_REVOKE_BATCH {
+        assert!(!client.is_attestation_revoked(&i));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Issue #235: Attestation mutation functions — legal hold and pause gates
+// ---------------------------------------------------------------------------
+
+/// append_attestation_digest is blocked by an active legal hold.
+#[test]
+fn test_append_blocked_by_legal_hold() {
+    let env = Env::default();
+    let (client, _) = setup_with_init(&env);
+    client.set_legal_hold(&true, &0u32);
+    assert_contract_error(
+        client.try_append_attestation_digest(&digest(&env, 0x01)),
+        EscrowError::LegalHoldBlocksAttestations,
+    );
+}
+
+/// append_attestation_digest succeeds after legal hold is cleared.
+#[test]
+fn test_append_succeeds_after_legal_hold_cleared() {
+    let env = Env::default();
+    let (client, _) = setup_with_init(&env);
+    client.set_legal_hold(&true, &0u32);
+    client.set_legal_hold(&false, &1u32);
+    client.append_attestation_digest(&digest(&env, 0x02)); // must succeed
+    assert_eq!(client.get_attestation_append_log().len(), 1);
+}
+
+/// revoke_attestation_digest is blocked by an active legal hold.
+#[test]
+fn test_revoke_single_blocked_by_legal_hold() {
+    let env = Env::default();
+    let (client, _) = setup_with_init(&env);
+    client.append_attestation_digest(&digest(&env, 0x01));
+    client.set_legal_hold(&true, &0u32);
+    assert_contract_error(
+        client.try_revoke_attestation_digest(&0),
+        EscrowError::LegalHoldBlocksAttestations,
+    );
+    assert!(!client.is_attestation_revoked(&0));
+}
+
+/// revoke_attestation_digests (batch) is blocked by an active legal hold.
+#[test]
+fn test_revoke_batch_blocked_by_legal_hold() {
+    let env = Env::default();
+    let (client, _) = setup_with_init(&env);
+    client.append_attestation_digest(&digest(&env, 0x01));
+    client.append_attestation_digest(&digest(&env, 0x02));
+    client.set_legal_hold(&true, &0u32);
+    let indices = soroban_sdk::vec![&env, 0u32, 1u32];
+    assert_contract_error(
+        client.try_revoke_attestation_digests(&indices),
+        EscrowError::LegalHoldBlocksAttestations,
+    );
+    assert!(!client.is_attestation_revoked(&0));
+    assert!(!client.is_attestation_revoked(&1));
+}
+
+/// unrevoke_attestation_digest is blocked by an active legal hold.
+#[test]
+fn test_unrevoke_single_blocked_by_legal_hold() {
+    let env = Env::default();
+    let (client, _) = setup_with_init(&env);
+    client.append_attestation_digest(&digest(&env, 0x01));
+    client.revoke_attestation_digest(&0);
+    client.set_legal_hold(&true, &0u32);
+    assert_contract_error(
+        client.try_unrevoke_attestation_digest(&0),
+        EscrowError::LegalHoldBlocksAttestations,
+    );
+    // State unchanged — still revoked.
+    assert!(client.is_attestation_revoked(&0));
+}
+
+/// unrevoke_attestation_digests (batch) is blocked by an active legal hold.
+#[test]
+fn test_batch_unrevoke_blocked_by_legal_hold() {
+    let env = Env::default();
+    let (client, _) = setup_with_init(&env);
+    client.append_attestation_digest(&digest(&env, 0x01));
+    client.revoke_attestation_digest(&0);
+    client.set_legal_hold(&true, &0u32);
+    let indices = soroban_sdk::vec![&env, 0u32];
+    assert_contract_error(
+        client.try_unrevoke_attestation_digests(&indices),
+        EscrowError::LegalHoldBlocksAttestations,
+    );
+    assert!(client.is_attestation_revoked(&0));
+}
+
+/// append_attestation_digest is blocked by an active operational pause.
+#[test]
+fn test_append_blocked_by_pause() {
+    let env = Env::default();
+    let (client, _) = setup_with_init(&env);
+    client.set_paused(&true, &PauseScope::All, &PauseReason::Incident);
+    assert_contract_error(
+        client.try_append_attestation_digest(&digest(&env, 0x01)),
+        EscrowError::PausedBlocksAttestations,
+    );
+}
+
+/// revoke_attestation_digest is blocked by an active operational pause.
+#[test]
+fn test_revoke_single_blocked_by_pause() {
+    let env = Env::default();
+    let (client, _) = setup_with_init(&env);
+    client.append_attestation_digest(&digest(&env, 0x01));
+    client.set_paused(&true, &PauseScope::All, &PauseReason::Incident);
+    assert_contract_error(
+        client.try_revoke_attestation_digest(&0),
+        EscrowError::PausedBlocksAttestations,
+    );
+    assert!(!client.is_attestation_revoked(&0));
+}
+
+/// revoke_attestation_digests (batch) is blocked by an active operational pause.
+#[test]
+fn test_revoke_batch_blocked_by_pause() {
+    let env = Env::default();
+    let (client, _) = setup_with_init(&env);
+    client.append_attestation_digest(&digest(&env, 0x01));
+    let indices = soroban_sdk::vec![&env, 0u32];
+    client.set_paused(&true, &PauseScope::All, &PauseReason::Incident);
+    assert_contract_error(
+        client.try_revoke_attestation_digests(&indices),
+        EscrowError::PausedBlocksAttestations,
+    );
+    assert!(!client.is_attestation_revoked(&0));
+}
+
+/// unrevoke_attestation_digest is blocked by an active operational pause.
+#[test]
+fn test_unrevoke_single_blocked_by_pause() {
+    let env = Env::default();
+    let (client, _) = setup_with_init(&env);
+    client.append_attestation_digest(&digest(&env, 0x01));
+    client.revoke_attestation_digest(&0);
+    client.set_paused(&true, &PauseScope::All, &PauseReason::Incident);
+    assert_contract_error(
+        client.try_unrevoke_attestation_digest(&0),
+        EscrowError::PausedBlocksAttestations,
+    );
+    assert!(client.is_attestation_revoked(&0));
+}
+
+/// unrevoke_attestation_digests (batch) is blocked by an active operational pause.
+#[test]
+fn test_batch_unrevoke_blocked_by_pause() {
+    let env = Env::default();
+    let (client, _) = setup_with_init(&env);
+    client.append_attestation_digest(&digest(&env, 0x01));
+    client.revoke_attestation_digest(&0);
+    client.set_paused(&true, &PauseScope::All, &PauseReason::Incident);
+    let indices = soroban_sdk::vec![&env, 0u32];
+    assert_contract_error(
+        client.try_unrevoke_attestation_digests(&indices),
+        EscrowError::PausedBlocksAttestations,
+    );
+    assert!(client.is_attestation_revoked(&0));
+}
+
+/// Normal attestation operations proceed when neither pause nor legal hold is active.
+#[test]
+fn test_attestation_operations_work_without_hold_or_pause() {
+    let env = Env::default();
+    let (client, _) = setup_with_init(&env);
+
+    // append works
+    client.append_attestation_digest(&digest(&env, 0x01));
+    client.append_attestation_digest(&digest(&env, 0x02));
+
+    // single revoke works
+    client.revoke_attestation_digest(&0);
+    assert!(client.is_attestation_revoked(&0));
+
+    // batch revoke works
+    let batch_rev = soroban_sdk::vec![&env, 1u32];
+    client.revoke_attestation_digests(&batch_rev);
+    assert!(client.is_attestation_revoked(&1));
+
+    // single unrevoke works
+    client.unrevoke_attestation_digest(&0);
+    assert!(!client.is_attestation_revoked(&0));
+
+    // batch unrevoke works
+    let batch_unrev = soroban_sdk::vec![&env, 1u32];
+    client.unrevoke_attestation_digests(&batch_unrev);
+    assert!(!client.is_attestation_revoked(&1));
+}

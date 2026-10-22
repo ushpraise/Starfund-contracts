@@ -53,9 +53,8 @@ fn init_open(
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     (token, treasury)
 }
 
@@ -88,9 +87,8 @@ fn init_open_with_clear_delay(
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     (token, treasury)
 }
 
@@ -127,9 +125,8 @@ fn init_funded_with_real_token<'a>(
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     sac_admin.mint(investor, &TARGET);
     client.fund(investor, &TARGET);
     (client, escrow_id)
@@ -180,9 +177,8 @@ fn init_settled<'a>(
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     let sac_admin = StellarAssetClient::new(env, &token);
     sac_admin.mint(investor, &TARGET);
     client.fund(investor, &TARGET);
@@ -496,7 +492,7 @@ fn cancel_clear_legal_hold_with_pending_request_succeeds() {
     let env = Env::default();
     let (client, admin, sme) = setup(&env);
     init_open(&client, &env, &admin, &sme, "LHB001");
-    client.set_legal_hold(&true);
+    client.set_legal_hold(&true, &0u32);
     assert!(client.get_legal_hold());
     client.request_clear_legal_hold();
     assert!(client.get_legal_hold_clearable_at().is_some());
@@ -513,7 +509,7 @@ fn cancel_clear_legal_hold_without_pending_request_panics() {
     let env = Env::default();
     let (client, admin, sme) = setup(&env);
     init_open(&client, &env, &admin, &sme, "LHB002");
-    client.set_legal_hold(&true);
+    client.set_legal_hold(&true, &0u32);
     client.cancel_clear_legal_hold();
 }
 
@@ -523,7 +519,7 @@ fn cancel_clear_legal_hold_by_non_admin_panics() {
     let env = Env::default();
     let (client, admin, sme) = setup(&env);
     init_open(&client, &env, &admin, &sme, "LHB003");
-    client.set_legal_hold(&true);
+    client.set_legal_hold(&true, &0u32);
     client.request_clear_legal_hold();
     env.mock_auths(&[]);
     client.cancel_clear_legal_hold();
@@ -535,7 +531,7 @@ fn cancel_clear_legal_hold_allows_new_request_after_cancellation() {
     let env = Env::default();
     let (client, admin, sme) = setup(&env);
     init_open(&client, &env, &admin, &sme, "LHB004");
-    client.set_legal_hold(&true);
+    client.set_legal_hold(&true, &0u32);
     client.request_clear_legal_hold();
     // Cancel and re-request still yields a valid clearable_at.
     client.cancel_clear_legal_hold();
@@ -705,14 +701,18 @@ fn hold_blocks_fund_before_status_check_on_funded_escrow() {
 // ── 12. Idempotent toggling ──────────────────────────────────────────────────
 
 #[test]
-fn set_legal_hold_true_when_already_true_is_idempotent() {
+fn set_legal_hold_true_when_already_true_returns_typed_error() {
     let env = Env::default();
     let (client, admin, sme) = setup(&env);
     init_open(&client, &env, &admin, &sme, "LHI001");
     client.set_legal_hold(&true, &0u32);
     assert!(client.get_legal_hold());
-    // Second set(true) must not panic.
-    client.set_legal_hold(&true, &1u32);
+    // Second set(true) must revert with LegalHoldStateUnchanged.
+    assert_contract_error(
+        client.try_set_legal_hold(&true, &1u32),
+        EscrowError::LegalHoldStateUnchanged,
+    );
+    // Hold must still be active.
     assert!(client.get_legal_hold());
 }
 
@@ -988,9 +988,8 @@ fn recovery_new_admin_clears_hold_and_operations_resume() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     sac_admin.mint(&investor, &TARGET);
     client.fund(&investor, &TARGET);
     // Mint yield portion so claim_investor_payout can transfer principal + yield.
@@ -1045,7 +1044,7 @@ fn test_clear_legal_hold_after_delay_succeeds() {
     let (client, admin, sme) = setup(&env);
     let delay: u64 = 100;
     init_open_with_clear_delay(&client, &env, &admin, &sme, "LHD001", Some(delay));
-    client.set_legal_hold(&true);
+    client.set_legal_hold(&true, &0u32);
     client.request_clear_legal_hold();
 
     let clearable_at = client
@@ -1064,7 +1063,7 @@ fn test_clear_legal_hold_after_delay_no_request_panics() {
     let env = Env::default();
     let (client, admin, sme) = setup(&env);
     init_open_with_clear_delay(&client, &env, &admin, &sme, "LHD002", Some(100));
-    client.set_legal_hold(&true);
+    client.set_legal_hold(&true, &0u32);
 
     assert_contract_error(
         client.try_clear_legal_hold_after_delay(),
@@ -1078,11 +1077,74 @@ fn test_clear_legal_hold_after_delay_before_clearable_at_panics() {
     let env = Env::default();
     let (client, admin, sme) = setup(&env);
     init_open_with_clear_delay(&client, &env, &admin, &sme, "LHD003", Some(100));
-    client.set_legal_hold(&true);
+    client.set_legal_hold(&true, &0u32);
     client.request_clear_legal_hold();
 
     assert_contract_error(
         client.try_clear_legal_hold_after_delay(),
         EscrowError::LegalHoldClearNotReady,
     );
+}
+
+// ── Issue #237: set_legal_hold idempotency guard ──────────────────────────────
+
+/// Setting legal hold to false when it is already false must revert with
+/// [`EscrowError::LegalHoldStateUnchanged`]. Spurious clearance events must
+/// not be emitted.
+#[test]
+fn set_legal_hold_false_when_already_false_returns_typed_error() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, sme) = setup(&env);
+    init_open(&client, &env, &admin, &sme, "LHI003");
+
+    // Default state is hold=false; calling set_legal_hold(false) must be rejected.
+    assert_contract_error(
+        client.try_set_legal_hold(&false, &0u32),
+        EscrowError::LegalHoldStateUnchanged,
+    );
+    // Hold remains inactive.
+    assert!(!client.get_legal_hold());
+}
+
+/// After activating and then clearing the hold, a second clearance attempt must
+/// revert with [`EscrowError::LegalHoldStateUnchanged`].
+#[test]
+fn set_legal_hold_false_twice_returns_typed_error_on_second() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, sme) = setup(&env);
+    init_open(&client, &env, &admin, &sme, "LHI004");
+
+    client.set_legal_hold(&true, &0u32);
+    // First deactivation is valid.
+    client.clear_legal_hold(&1u32);
+    assert!(!client.get_legal_hold());
+
+    // Second deactivation via set_legal_hold(false) must be rejected.
+    assert_contract_error(
+        client.try_set_legal_hold(&false, &2u32),
+        EscrowError::LegalHoldStateUnchanged,
+    );
+}
+
+/// Repeatedly activating an already-active hold must revert with
+/// [`EscrowError::LegalHoldStateUnchanged`] without emitting duplicate events.
+#[test]
+fn set_legal_hold_true_twice_returns_typed_error_on_second() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, sme) = setup(&env);
+    init_open(&client, &env, &admin, &sme, "LHI005");
+
+    client.set_legal_hold(&true, &0u32);
+    assert!(client.get_legal_hold());
+
+    // Second activation must be rejected.
+    assert_contract_error(
+        client.try_set_legal_hold(&true, &1u32),
+        EscrowError::LegalHoldStateUnchanged,
+    );
+    // Hold is still active.
+    assert!(client.get_legal_hold());
 }

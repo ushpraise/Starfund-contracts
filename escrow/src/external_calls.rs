@@ -73,7 +73,9 @@ use soroban_sdk::{token::TokenClient, Address, Env, MuxedAddress};
 /// then verify SEP-41-style conservation: sender decreases and recipient increases by exactly
 /// `amount`.
 ///
-/// This function performs strict balance-delta verification through atomic balance checks:
+/// This is a generic outbound transfer helper: `recipient` may be any party (SME, investor,
+/// treasury, etc.) depending on the caller. It performs strict balance-delta verification through
+/// atomic balance checks:
 /// 1. Records pre-transfer balances for both sender and recipient
 /// 2. Executes transfer using [`MuxedAddress::from`] for Stellar compatibility
 /// 3. Records post-transfer balances and calculates exact deltas
@@ -89,7 +91,7 @@ use soroban_sdk::{token::TokenClient, Address, Env, MuxedAddress};
 /// * `env` - The Soroban environment
 /// * `token_addr` - Address of the SEP-41 token contract
 /// * `from` - Address transferring from (usually this escrow contract)
-/// * `recipient` - Address receiving the tokens
+/// * `recipient` - Address receiving the tokens (any outbound recipient)
 /// * `amount` - Amount to transfer (must be positive)
 ///
 /// # Errors
@@ -169,46 +171,6 @@ pub fn transfer_funding_token_with_balance_checks(
 /// Emits typed [`EscrowError`] codes if `amount` is not positive, investor balance is insufficient,
 /// balance deltas do not equal `amount`, or balance delta calculation underflows.
 pub fn transfer_funding_token_inbound_with_balance_checks(
-    env: &Env,
-    token_addr: &Address,
-    investor: &Address,
-    to: &Address,
-    amount: i128,
-) {
-    ensure(
-        env,
-        amount > 0,
-        EscrowError::InboundTransferAmountNotPositive,
-    );
-    let token = TokenClient::new(env, token_addr);
-    let investor_before = token.balance(investor);
-    let contract_before = token.balance(to);
-    ensure(
-        env,
-        investor_before >= amount,
-        EscrowError::InboundInsufficientTokenBalanceBeforeTransfer,
-    );
+    env
 
-    token.transfer(investor, MuxedAddress::from(to.clone()), &amount);
-
-    let investor_after = token.balance(investor);
-    let contract_after = token.balance(to);
-
-    let spent = investor_before
-        .checked_sub(investor_after)
-        .unwrap_or_else(|| fail(env, EscrowError::InboundSenderBalanceUnderflow));
-    let received = contract_after
-        .checked_sub(contract_before)
-        .unwrap_or_else(|| fail(env, EscrowError::InboundRecipientBalanceUnderflow));
-
-    ensure(
-        env,
-        spent == amount,
-        EscrowError::InboundSenderBalanceDeltaMismatch,
-    );
-    ensure(
-        env,
-        received == amount,
-        EscrowError::InboundRecipientBalanceDeltaMismatch,
-    );
-}
+/* … truncated 1200 chars — edit only what you need near the top … */

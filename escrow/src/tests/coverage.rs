@@ -5,7 +5,7 @@ use super::{
 use crate::{
     AttestationDigestAppended, CollateralClearedEvt, CollateralCommitmentSnapshot,
     CollateralRecordedEvt, DataKey, EscrowCloseSnapshot, EscrowError, FundingCancelled,
-    InvestorRefundedEvt, StarfundEscrow, StarfundEscrowClient, PauseReason, PauseScope,
+    InvestorRefundedEvt, StarfundEscrow, StarfundEscrowClient, EscrowStatus, PauseReason, PauseScope,
     PrimaryAttestationBound, RegistryRefRebound, TreasuryDustSwept, YieldTier,
     DEFAULT_MATURITY_MAX_HORIZON_SECS, MAX_ATTESTATION_APPEND_ENTRIES, SCHEMA_VERSION,
 };
@@ -58,8 +58,7 @@ fn typed_error_codes_cover_init_fund_settle_withdraw_and_claim() {
             &None,
             &None,
             &None,
-            &None::<i64>,
-        &None::<u32>,
+    
         ),
         EscrowError::AmountMustBePositive,
     );
@@ -169,6 +168,14 @@ fn escrow_error_discriminants_are_unique() {
         EscrowError::EscrowNotInitialized,
         EscrowError::FundingTokenNotSet,
         EscrowError::TreasuryNotSet,
+        EscrowError::MaxPerInvestorCapNotConfigured,
+        EscrowError::MaxPerInvestorCapNotRaised,
+        EscrowError::MaxPerInvestorCapNotPositive,
+        EscrowError::MaxPerInvestorCapNotLowered,
+        EscrowError::PerInvestorCapLowerNotOpen,
+        EscrowError::PerInvestorCapExceedsFundingTarget,
+        EscrowError::PerInvestorCapBelowMinContributionFloor,
+        EscrowError::HorizonNotRaised,
         EscrowError::LegalHoldBlocksTreasuryDustSweep,
         EscrowError::SweepAmountNotPositive,
         EscrowError::SweepAmountExceedsMax,
@@ -239,6 +246,7 @@ fn escrow_error_discriminants_are_unique() {
         EscrowError::InvestorClaimNotSettled,
         EscrowError::InvestorCommitmentLockNotExpired,
         EscrowError::ComputePayoutArithmeticOverflow,
+        EscrowError::FundingTokenScaleInvalid,
         EscrowError::LegalHoldBlocksCancelFunding,
         EscrowError::CancelFundingNotOpen,
         EscrowError::RefundNotCancelled,
@@ -270,6 +278,8 @@ fn escrow_error_discriminants_are_unique() {
         EscrowError::PausedBlocksSettlement,
         EscrowError::PausedBlocksWithdrawal,
         EscrowError::PausedBlocksInvestorClaims,
+        EscrowError::CollateralNotOpen,
+        EscrowError::PausedBlocksCollateral,
         EscrowError::ProtocolFeeBpsOutOfRange,
         EscrowError::WithdrawFeeArithmeticOverflow,
         EscrowError::WithdrawNetArithmeticUnderflow,
@@ -302,6 +312,7 @@ fn escrow_error_discriminants_are_unique() {
         EscrowError::DisputeCloseUnauthorized,
         EscrowError::DisputeAlreadyOpen,
         EscrowError::DisputeNotOpen,
+        EscrowError::DisputeEscrowTerminated,
         EscrowError::CallbackWrongOrigin,
         EscrowError::CallbackWrongNonce,
         EscrowError::CallbackWrongPhase,
@@ -312,6 +323,7 @@ fn escrow_error_discriminants_are_unique() {
         EscrowError::BeneficiaryImmutableAfterFunding,
         EscrowError::AdminRecoveryNotExpired,
         EscrowError::UniqueInvestorHardCapReached,
+        EscrowError::FundingTokenDecimalsMismatch,
     ];
     let mut codes = std::collections::BTreeSet::new();
     for error in errors {
@@ -340,6 +352,11 @@ fn escrow_error_discriminants_match_canonical_table() {
         (EscrowError::EscrowNotInitialized, 20),
         (EscrowError::FundingTokenNotSet, 21),
         (EscrowError::TreasuryNotSet, 22),
+        (EscrowError::MaxPerInvestorCapNotConfigured, 24),
+        (EscrowError::MaxPerInvestorCapNotRaised, 25),
+        (EscrowError::MaxPerInvestorCapNotPositive, 26),
+        (EscrowError::MaxPerInvestorCapNotLowered, 27),
+        (EscrowError::PerInvestorCapLowerNotOpen, 28),
         (EscrowError::LegalHoldBlocksTreasuryDustSweep, 30),
         (EscrowError::SweepAmountNotPositive, 31),
         (EscrowError::SweepAmountExceedsMax, 32),
@@ -398,6 +415,7 @@ fn escrow_error_discriminants_match_canonical_table() {
         (EscrowError::InvestorClaimNotSettled, 127),
         (EscrowError::InvestorCommitmentLockNotExpired, 128),
         (EscrowError::ComputePayoutArithmeticOverflow, 129),
+        (EscrowError::FundingTokenScaleInvalid, 130),
         (EscrowError::LegalHoldBlocksCancelFunding, 140),
         (EscrowError::CancelFundingNotOpen, 141),
         (EscrowError::RefundNotCancelled, 142),
@@ -411,11 +429,15 @@ fn escrow_error_discriminants_match_canonical_table() {
         (EscrowError::NewSmeSameAsCurrent, 162),
         (EscrowError::FundingDeadlinePassed, 164),
         (EscrowError::NoPendingAdmin, 250),
+        (EscrowError::PerInvestorCapExceedsFundingTarget, 268),
+        (EscrowError::PerInvestorCapBelowMinContributionFloor, 270),
+        (EscrowError::HorizonNotRaised, 271),
         (EscrowError::FloorLowerNotOpen, 269),
         (EscrowError::NewFloorNotLower, 262),
         (EscrowError::NewFloorNotPositive, 261),
+        (EscrowError::FundingTokenDecimalsMismatch, 268),
     ];
-    assert_eq!(TABLE.len(), 90);
+    assert_eq!(TABLE.len(), 99);
     for (variant, code) in TABLE {
         assert_eq!(*variant as u32, *code, "discriminant drift for code {code}");
     }
@@ -1120,7 +1142,7 @@ fn test_fund_during_legal_hold() {
     &None::<i64>,
         &None::<u32>,);
 
-    client.set_legal_hold(&true);
+    client.set_legal_hold(&true, &0u32);
     let investor = Address::generate(&env);
     client.fund(&investor, &10);
 }
@@ -2049,6 +2071,7 @@ fn test_settle_too_early() {
         &None,
     );
 
+    let investor = Address::generate(&env);
     assert!(!client.is_allowlist_active());
     assert!(!client.is_investor_allowlisted(&investor));
 }
@@ -2817,6 +2840,7 @@ fn test_get_escrow_summary_happy_path() {
 
     // Verify fields match individual getters
     assert_eq!(summary.escrow, client.get_escrow());
+    assert_eq!(summary.status_classification, EscrowStatus::Open);
     assert_eq!(summary.has_maturity_lock, client.has_maturity_lock());
     assert_eq!(summary.legal_hold, client.get_legal_hold());
 
@@ -2866,6 +2890,26 @@ fn test_get_escrow_summary_happy_path() {
 }
 
 #[test]
+fn test_get_escrow_summary_preserves_unknown_status_code() {
+    let env = Env::default();
+    let (client, admin, sme) = setup(&env);
+    default_init(&client, &env, &admin, &sme);
+
+    env.as_contract(&client.address, || {
+        let mut escrow = StarfundEscrow::get_escrow(env.clone());
+        escrow.status = 42;
+        env.storage().instance().set(&DataKey::Escrow, &escrow);
+    });
+
+    let summary = client.get_escrow_summary();
+    assert_eq!(summary.escrow.status, 42);
+    assert_eq!(
+        summary.status_classification,
+        EscrowStatus::Unknown(42)
+    );
+}
+
+#[test]
 fn test_get_escrow_summary_after_state_changes() {
     let env = Env::default();
     env.mock_all_auths();
@@ -2894,6 +2938,7 @@ fn test_get_escrow_summary_after_state_changes() {
         &None::<u32>,);
 
     // Make state changes
+    let investor = Address::generate(&env);
     client.set_allowlist_active(&true, &0u32);
     assert!(client.is_allowlist_active());
 
@@ -3260,7 +3305,7 @@ fn test_is_settleable_blocked_by_legal_hold() {
     let (client, admin, sme) = setup(&env);
     init_settleable_test(&env, &client, &admin, &sme, 0);
     fund_to_target_stl(&env, &client);
-    client.set_legal_hold(&true);
+    client.set_legal_hold(&true, &0u32);
     assert!(!client.is_settleable());
 }
 
@@ -3307,7 +3352,7 @@ fn test_is_settleable_funded_maturity_zero_hold_active_returns_false() {
     let (client, admin, sme) = setup(&env);
     init_settleable_test(&env, &client, &admin, &sme, 0);
     fund_to_target_stl(&env, &client);
-    client.set_legal_hold(&true);
+    client.set_legal_hold(&true, &0u32);
     assert!(
         !client.is_settleable(),
         "hold must block settleability even when maturity is 0"
@@ -3949,7 +3994,7 @@ fn test_state_machine_illegal_transitions_rejected() {
     );
     // - try_cancel_funding() should fail with CancelFundingNotOpen
     assert_contract_error(
-        client.try_cancel_funding(),
+        client.try_cancel_funding(&0u32),
         EscrowError::CancelFundingNotOpen,
     );
 
@@ -3977,7 +4022,7 @@ fn test_state_machine_illegal_transitions_rejected() {
         &None::<u32>,);
 
     // 3. Cancel client2 to reach Status 4 (Cancelled)
-    client2.cancel_funding();
+    client2.cancel_funding(&0u32);
     assert_eq!(client2.get_escrow().status, 4);
 
     // In Status 4 (Cancelled):
@@ -3987,7 +4032,7 @@ fn test_state_machine_illegal_transitions_rejected() {
     assert_contract_error(client2.try_withdraw(), EscrowError::WithdrawalNotFunded);
     // - try_cancel_funding() should fail with CancelFundingNotOpen
     assert_contract_error(
-        client2.try_cancel_funding(),
+        client2.try_cancel_funding(&0u32),
         EscrowError::CancelFundingNotOpen,
     );
     // - try_fund() should fail with EscrowNotOpenForFunding
@@ -4007,7 +4052,7 @@ fn test_state_machine_illegal_transitions_rejected() {
     assert_contract_error(client.try_withdraw(), EscrowError::WithdrawalNotFunded);
     // - try_cancel_funding() should fail with CancelFundingNotOpen
     assert_contract_error(
-        client.try_cancel_funding(),
+        client.try_cancel_funding(&0u32),
         EscrowError::CancelFundingNotOpen,
     );
     // - try_refund() should fail with RefundNotCancelled
@@ -4054,7 +4099,7 @@ fn test_state_machine_illegal_transitions_rejected() {
     assert_contract_error(client3.try_withdraw(), EscrowError::WithdrawalNotFunded);
     // - try_cancel_funding() should fail with CancelFundingNotOpen
     assert_contract_error(
-        client3.try_cancel_funding(),
+        client3.try_cancel_funding(&0u32),
         EscrowError::CancelFundingNotOpen,
     );
     // - try_refund() should fail with RefundNotCancelled
@@ -4173,7 +4218,7 @@ fn refactor_gate_helpers_hold_active_emits_per_entrypoint_variant() {
 
     // --- sweep_terminal_dust
     let (sweep, _a, _s) = init_open(&env, "LH_SWP");
-    sweep.set_legal_hold(&true);
+    sweep.set_legal_hold(&true, &0u32);
     assert_contract_error(
         sweep.try_sweep_terminal_dust(&1i128),
         EscrowError::LegalHoldBlocksTreasuryDustSweep,
@@ -4181,7 +4226,7 @@ fn refactor_gate_helpers_hold_active_emits_per_entrypoint_variant() {
 
     // --- rotate_beneficiary
     let (rot, _a, _sme) = init_open(&env, "LH_ROT");
-    rot.set_legal_hold(&true);
+    rot.set_legal_hold(&true, &0u32);
     let new_sme = Address::generate(&env);
     assert_contract_error(
         rot.try_rotate_beneficiary(&new_sme),
@@ -4191,7 +4236,7 @@ fn refactor_gate_helpers_hold_active_emits_per_entrypoint_variant() {
     // --- fund
     let (fund_c, _a, _s) = init_open(&env, "LH_FND");
     let _investor = Address::generate(&env);
-    fund_c.set_legal_hold(&true);
+    fund_c.set_legal_hold(&true, &0u32);
     assert_contract_error(
         fund_c.try_fund(&_investor, &10i128),
         EscrowError::LegalHoldBlocksFunding,
@@ -4199,7 +4244,7 @@ fn refactor_gate_helpers_hold_active_emits_per_entrypoint_variant() {
 
     // --- partial_settle (admin authority)
     let (ps_c, ps_admin, _ps_sme) = init_open(&env, "LH_PS");
-    ps_c.set_legal_hold(&true);
+    ps_c.set_legal_hold(&true, &0u32);
     assert_contract_error(
         ps_c.try_partial_settle(&ps_admin),
         EscrowError::LegalHoldBlocksPartialSettle,
@@ -4236,7 +4281,7 @@ fn refactor_gate_helpers_hold_active_emits_per_entrypoint_variant() {
     );
     token.stellar.mint(&funder, &100i128);
     funded.fund(&funder, &100i128);
-    funded.set_legal_hold(&true);
+    funded.set_legal_hold(&true, &0u32);
     assert_contract_error(funded.try_settle(), EscrowError::LegalHoldBlocksSettlement);
     assert_contract_error(
         funded.try_withdraw(),
@@ -4249,9 +4294,9 @@ fn refactor_gate_helpers_hold_active_emits_per_entrypoint_variant() {
 
     // --- cancel_funding
     let (cancel_c, _ca, _cs) = init_open(&env, "LH_CAN");
-    cancel_c.set_legal_hold(&true);
+    cancel_c.set_legal_hold(&true, &0u32);
     assert_contract_error(
-        cancel_c.try_cancel_funding(),
+        cancel_c.try_cancel_funding(&0u32),
         EscrowError::LegalHoldBlocksCancelFunding,
     );
 

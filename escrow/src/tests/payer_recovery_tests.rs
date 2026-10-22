@@ -4,8 +4,8 @@ use crate::{
 };
 use soroban_sdk::{
     symbol_short,
-    testutils::{Address as _, Events},
-    Address, Env, String,
+    testutils::{Address as _, Events, Ledger as _},
+    Address, Env, Event, String,
 };
 
 #[test]
@@ -33,9 +33,8 @@ fn test_propose_payer_recovery_admin_gated() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     let new_payer = Address::generate(&env);
     let result = client.propose_payer_recovery(&new_payer, &None);
@@ -70,9 +69,8 @@ fn test_propose_payer_recovery_non_admin_fails() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     let new_payer = Address::generate(&env);
     // Don't mock auth for non-admin
@@ -105,9 +103,8 @@ fn test_propose_payer_recovery_same_payer_fails() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     // Try to propose the current payer (admin) as the new payer
     assert_contract_error(
@@ -141,12 +138,11 @@ fn test_propose_payer_recovery_not_open_fails() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     // Cancel the escrow to move it out of open/funded status
-    client.cancel_funding();
+    client.cancel_funding(&0u32);
 
     let new_payer = Address::generate(&env);
     assert_contract_error(
@@ -180,9 +176,8 @@ fn test_accept_payer_recovery_succeeds() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     let new_payer = Address::generate(&env);
     client.propose_payer_recovery(&new_payer, &None);
@@ -216,16 +211,14 @@ fn test_accept_payer_recovery_new_payer_auth_required() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     let new_payer = Address::generate(&env);
     client.propose_payer_recovery(&new_payer, &None);
 
-    // Attempt accept without new_payer auth should fail
-    env.mock_all_auths();
-    env.set_default_account(&Address::generate(&env)); // Different account
+    // Attempt accept without new_payer auth should fail.
+    env.mock_auths(&[]);
     let res = client.try_accept_payer_recovery();
     assert!(res.is_err());
 }
@@ -255,9 +248,8 @@ fn test_accept_payer_recovery_no_pending_fails() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     // Try to accept without proposing first
     assert_contract_error(
@@ -291,9 +283,8 @@ fn test_accept_payer_recovery_expired_fails() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     let new_payer = Address::generate(&env);
     // Propose with a very short validity window (1 second)
@@ -335,9 +326,8 @@ fn test_cancel_pending_payer_admin_gated() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     let new_payer = Address::generate(&env);
     client.propose_payer_recovery(&new_payer, &None);
@@ -375,9 +365,8 @@ fn test_cancel_pending_payer_non_admin_fails() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     let new_payer = Address::generate(&env);
     client.propose_payer_recovery(&new_payer, &None);
@@ -414,9 +403,8 @@ fn test_cancel_pending_payer_no_pending_fails() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     // Try to cancel without proposing first
     assert_contract_error(
@@ -451,39 +439,36 @@ fn test_payer_recovery_emits_correct_events() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     let new_payer = Address::generate(&env);
     client.propose_payer_recovery(&new_payer, &None);
 
+    let invoice_id = soroban_sdk::Symbol::new(&env, "PAYER_REC_012");
+    let proposal = PayerRecoveryProposed {
+        name: symbol_short!("payer_prp"),
+        invoice_id: invoice_id.clone(),
+        current_payer: admin.clone(),
+        pending_payer: new_payer.clone(),
+    }
+    .to_xdr(&env, &contract_id);
     let all_events = env.events().all();
-    let propose_event = all_events
-        .iter()
-        .find(|e| {
-            if let Ok(e) = PayerRecoveryProposed::from_xdr(&env, &e.clone().xdr) {
-                true
-            } else {
-                false
-            }
-        })
-        .expect("PayerRecoveryProposed event not found");
+    let events = all_events.events();
+    assert!(events.contains(&proposal), "PayerRecoveryProposed event not found");
 
     // Accept and verify accepted event
     client.accept_payer_recovery();
     let all_events_after = env.events().all();
-    let accept_event = all_events_after
-        .iter()
-        .rev()
-        .find(|e| {
-            if let Ok(e) = PayerRecoveryAccepted::from_xdr(&env, &e.clone().xdr) {
-                true
-            } else {
-                false
-            }
-        })
-        .expect("PayerRecoveryAccepted event not found");
+    let accept_event = PayerRecoveryAccepted {
+        name: symbol_short!("payer_acc"),
+        invoice_id: invoice_id.clone(),
+        prior_payer: admin.clone(),
+        new_payer: new_payer.clone(),
+    }
+    .to_xdr(&env, &contract_id);
+    let after_events = all_events_after.events();
+    assert!(after_events.contains(&accept_event), "PayerRecoveryAccepted event not found");
 }
 
 #[test]
@@ -511,9 +496,8 @@ fn test_payer_recovery_full_lifecycle() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     let initial_payer = admin.clone();
     let escrow_before = client.get_escrow();

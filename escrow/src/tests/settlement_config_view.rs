@@ -206,3 +206,164 @@ fn test_defaults_idempotent_before_init() {
     assert_eq!(a.protocol_fee_bps, b.protocol_fee_bps);
     assert_eq!(a.maturity_max_horizon, b.maturity_max_horizon);
 }
+
+// ── EscrowSummary new-field tests (#240) ─────────────────────────────────────
+
+/// Helper: deploy and init with an optional funding_deadline and token_decimals.
+fn init_summary_escrow(
+    env: &Env,
+    client: &StarfundEscrowClient,
+    protocol_fee_bps: Option<i64>,
+    funding_deadline: Option<u64>,
+    token_decimals: Option<u32>,
+) {
+    let admin = Address::generate(env);
+    let sme = Address::generate(env);
+    let token = Address::generate(env);
+    let treasury = Address::generate(env);
+    client.init(
+        &admin,
+        &soroban_sdk::String::from_str(env, "SUMCFG01"),
+        &sme,
+        &10_000i128,
+        &500i64,
+        &0u64,
+        &token,
+        &None,
+        &treasury,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &funding_deadline,
+        &protocol_fee_bps,
+        &token_decimals,
+    );
+}
+
+/// Before `init`, dispute_active, funding_deadline, and token_decimals all
+/// return their documented defaults.
+#[test]
+fn test_summary_defaults_before_init() {
+    let env = Env::default();
+    let client = deploy(&env);
+    let summary = client.get_escrow_summary();
+
+    assert!(!summary.dispute_active, "dispute_active must default to false");
+    assert_eq!(summary.funding_deadline, None, "funding_deadline must default to None");
+    assert_eq!(summary.token_decimals, None, "token_decimals must default to None");
+}
+
+/// After `init` without a funding_deadline or token_decimals, the summary fields
+/// reflect the absent-key defaults.
+#[test]
+fn test_summary_new_fields_default_after_init_no_deadline_no_decimals() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = deploy(&env);
+    init_summary_escrow(&env, &client, None, None, None);
+
+    let summary = client.get_escrow_summary();
+    assert!(!summary.dispute_active, "dispute_active must be false when no dispute set");
+    assert_eq!(summary.funding_deadline, None, "funding_deadline must be None when not set");
+    assert_eq!(summary.token_decimals, None, "token_decimals must be None when not set");
+}
+
+/// When a `funding_deadline` is supplied at init it must appear in the summary.
+#[test]
+fn test_summary_funding_deadline_populated() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_timestamp(1_000);
+    let client = deploy(&env);
+    let deadline: u64 = 5_000;
+    init_summary_escrow(&env, &client, None, Some(deadline), None);
+
+    let summary = client.get_escrow_summary();
+    assert_eq!(
+        summary.funding_deadline,
+        Some(deadline),
+        "funding_deadline in summary must match value passed at init"
+    );
+}
+
+/// When `token_decimals` is supplied at init it must appear in the summary.
+#[test]
+fn test_summary_token_decimals_populated() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = deploy(&env);
+    init_summary_escrow(&env, &client, None, None, Some(7u32));
+
+    let summary = client.get_escrow_summary();
+    assert_eq!(
+        summary.token_decimals,
+        Some(7u32),
+        "token_decimals in summary must match value passed at init"
+    );
+}
+
+/// `dispute_active` in the summary reflects the live dispute state.
+#[test]
+fn test_summary_dispute_active_reflects_state() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = deploy(&env);
+    init_summary_escrow(&env, &client, None, None, None);
+
+    // Initially no dispute.
+    assert!(!client.get_escrow_summary().dispute_active);
+
+    // Activate dispute.
+    client.set_dispute_active(&true);
+    assert!(
+        client.get_escrow_summary().dispute_active,
+        "dispute_active must be true after set_dispute_active(true)"
+    );
+
+    // Clear dispute.
+    client.set_dispute_active(&false);
+    assert!(
+        !client.get_escrow_summary().dispute_active,
+        "dispute_active must be false after set_dispute_active(false)"
+    );
+}
+
+/// `get_escrow_summary` must match the individual getters so the bundled view
+/// cannot drift.
+#[test]
+fn test_summary_new_fields_match_individual_getters() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_timestamp(100);
+    let client = deploy(&env);
+    let deadline: u64 = 5_000;
+    init_summary_escrow(&env, &client, Some(300i64), Some(deadline), Some(6u32));
+
+    let summary = client.get_escrow_summary();
+    assert_eq!(summary.dispute_active, client.is_dispute_active());
+    assert_eq!(summary.funding_deadline, client.get_funding_deadline());
+    // token_decimals matches what was passed at init (7 decimals stored as FundingTokenScale).
+    assert_eq!(summary.token_decimals, Some(6u32));
+}
+
+/// `get_escrow_summary` is a pure read — calling it multiple times returns
+/// identical results for the new fields.
+#[test]
+fn test_summary_new_fields_are_idempotent() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_timestamp(100);
+    let client = deploy(&env);
+    let deadline: u64 = 5_000;
+    init_summary_escrow(&env, &client, Some(200i64), Some(deadline), Some(4u32));
+
+    let a = client.get_escrow_summary();
+    let b = client.get_escrow_summary();
+    assert_eq!(a.dispute_active, b.dispute_active);
+    assert_eq!(a.funding_deadline, b.funding_deadline);
+    assert_eq!(a.token_decimals, b.token_decimals);
+}

@@ -49,26 +49,30 @@ version and reconcile against this document, using the
 
 ## Event Catalog
 
-The current contract defines 20 event structs.
+The current contract defines 22 event structs.
 
 | Rust event | `name` symbol | Entrypoint(s) |
 |---|---:|---|
 | `EscrowInitialized` | `escrow_ii` | `init` |
 | `MaxUniqueInvestorsCapLowered` | `inv_cap` | `lower_max_unique_investors` |
 | `EscrowFunded` | `funded` | `fund`, `fund_with_commitment` |
-| `FundingStateChanged` | `fund_chg` | `update_funding_target` |
+| `FundingStateChanged` | `fund_chg` | `update_funding_target`, `partial_settle` |
 | `EscrowSettled` | `escrow_sd` | `settle` |
 | `MaturityUpdatedEvent` | `maturity` | `update_maturity` |
 | `AdminAcceptedEvent` | `adm_acc` | `accept_admin` |
 | `AdminProposedEvent` | `adm_prop` | `propose_admin`, `transfer_admin` |
+| `AdminProposalCancelled` | `adm_can` | `cancel_pending_admin` |
 | `BeneficiaryRotated` | `ben_rot` | `rotate_beneficiary` |
 | `FundingTargetUpdated` | `fund_tgt` | `update_funding_target` |
 | `LegalHoldChanged` | `legalhld` | `set_legal_hold`, `clear_legal_hold` |
 | `CollateralRecordedEvt` | `coll_rec` | `record_sme_collateral_commitment` |
 | `SmeWithdrew` | `sme_wd` | `withdraw` |
 | `InvestorPayoutClaimed` | `inv_claim` | `claim_investor_payout` |
+| `FeeScheduleSubmitted` | `fee_sub` | `submit_fee_schedule` |
+| `FeeScheduleActivated` | `fee_act` | `activate_fee_schedule` |
 | `FundingCancelled` | `fund_can` | `cancel_funding` |
 | `InvestorRefundedEvt` | `refunded` | `refund` |
+| `EscrowUnfunded` | `unfund` | `unfund` |
 | `TreasuryDustSwept` | `dust_sw` | `sweep_terminal_dust` |
 | `PrimaryAttestationBound` | `att_bind` | `bind_primary_attestation_hash` |
 | `AttestationDigestAppended` | `att_app` | `append_attestation_digest` |
@@ -151,9 +155,10 @@ Data:
 
 Emitted exactly once when the escrow transitions from **open** (status 0) to **funded** (status 1).
 
-This event is emitted by `fund`, `fund_with_commitment`, `fund_batch`, `update_funding_target`, 
-or `partial_settle` — whichever call causes the `0 → 1` transition. Indexers should subscribe 
-to this event rather than buffering every `EscrowFunded` event to detect the funding-close edge.
+This event is emitted when `update_funding_target` or `partial_settle` causes the `0 → 1`
+transition. Funding deposits also emit it when they first cross the funding target. Indexers
+should subscribe to this event rather than buffering every `EscrowFunded` event to detect the
+funding-close edge.
 
 Topics:
 
@@ -193,7 +198,7 @@ Topics:
 Data:
 
 | Field | Type |
-|---|---|---|
+|---|---|
 | `funded_amount` | `i128` |
 | `yield_bps` | `i64` |
 | `maturity` | `u64` |
@@ -234,14 +239,12 @@ Data:
 
 | Field | Type |
 |---|---|
-| `prior_admin` | `Address` |
-| `new_admin` | `Address` |
+| `admin` | `Address` |
+| `timestamp` | `u64` |
 
 ### `AdminProposedEvent`
 
-Emitted after successful `propose_admin`. The deprecated `transfer_admin`
-shim delegates to `propose_admin`, so it emits this event rather than
-`AdminAcceptedEvent`.
+Emitted after successful `propose_admin` or `transfer_admin`.
 
 Topics:
 
@@ -255,8 +258,30 @@ Data:
 
 | Field | Type |
 |---|---|
-| `current_admin` | `Address` |
+| `admin` | `Address` |
 | `pending_admin` | `Address` |
+| `expires_at` | `u64` |
+| `timestamp` | `u64` |
+
+### `AdminProposalCancelled`
+
+Emitted after successful `cancel_pending_admin`.
+
+Topics:
+
+| Index | Field | Type | Value |
+|---:|---|---|---|
+| 0 | fixed event topic | `Symbol` | `admin_proposal_cancelled` |
+| 1 | `name` | `Symbol` | `adm_can` |
+| 2 | `invoice_id` | `Symbol` | Escrow invoice id |
+
+Data:
+
+| Field | Type | Notes |
+|---|---|---|
+| `admin` | `Address` | Admin that cancelled the proposal |
+| `cancelled_pending_admin` | `Address` | The revoked candidate admin address |
+| `timestamp` | `u64` | Ledger timestamp of cancellation |
 
 ### `BeneficiaryRotated`
 
@@ -274,8 +299,9 @@ Data:
 
 | Field | Type |
 |---|---|
-| `prior_sme` | `Address` |
-| `new_sme` | `Address` |
+| `old_beneficiary` | `Address` |
+| `new_beneficiary` | `Address` |
+| `timestamp` | `u64` |
 
 ### `FundingTargetUpdated`
 
@@ -298,8 +324,7 @@ Data:
 
 ### `LegalHoldChanged`
 
-Emitted after successful `set_legal_hold`; `clear_legal_hold` calls
-`set_legal_hold(false)`.
+Emitted after successful `set_legal_hold` or `clear_legal_hold`.
 
 Topics:
 
@@ -311,9 +336,10 @@ Topics:
 
 Data:
 
-| Field | Type | Values |
-|---|---|---|
-| `active` | `u32` | `1` = enabled, `0` = cleared |
+| Field | Type |
+|---|---|
+| `active` | `bool` |
+| `timestamp` | `u64` |
 
 ### `CollateralRecordedEvt`
 
@@ -325,17 +351,15 @@ Topics:
 |---:|---|---|---|
 | 0 | fixed event topic | `Symbol` | `collateral_recorded_evt` |
 | 1 | `name` | `Symbol` | `coll_rec` |
+| 2 | `invoice_id` | `Symbol` | Escrow invoice id |
 
 Data:
 
 | Field | Type |
 |---|---|
-| `invoice_id` | `Symbol` |
+| `sme` | `Address` |
 | `amount` | `i128` |
-| `prior_amount` | `i128` |
-
-Note: this event records SME-reported collateral metadata only. It is not proof
-of custody, token movement, lien, or enforceable on-chain collateral.
+| `timestamp` | `u64` |
 
 ### `SmeWithdrew`
 
@@ -353,12 +377,13 @@ Data:
 
 | Field | Type |
 |---|---|
+| `sme` | `Address` |
 | `amount` | `i128` |
+| `timestamp` | `u64` |
 
 ### `InvestorPayoutClaimed`
 
-Emitted after the first successful `claim_investor_payout` for an investor.
-Repeated claims by the same investor are idempotent no-ops and do not re-emit.
+Emitted after successful `claim_investor_payout`.
 
 Topics:
 
@@ -366,14 +391,53 @@ Topics:
 |---:|---|---|---|
 | 0 | fixed event topic | `Symbol` | `investor_payout_claimed` |
 | 1 | `name` | `Symbol` | `inv_claim` |
-| 2 | `investor` | `Address` | Claiming investor |
-| 3 | `invoice_id` | `Symbol` | Escrow invoice id |
+| 2 | `invoice_id` | `Symbol` | Escrow invoice id |
+| 3 | `investor` | `Address` | Claiming investor |
 
 Data:
 
 | Field | Type |
 |---|---|
-| `payout` | `i128` |
+| `amount` | `i128` |
+| `timestamp` | `u64` |
+
+### `FeeScheduleSubmitted`
+
+Emitted after successful `submit_fee_schedule`.
+
+Topics:
+
+| Index | Field | Type | Value |
+|---:|---|---|---|
+| 0 | fixed event topic | `Symbol` | `fee_schedule_submitted` |
+| 1 | `name` | `Symbol` | `fee_sub` |
+| 2 | `invoice_id` | `Symbol` | Escrow invoice id |
+
+Data:
+
+| Field | Type |
+|---|---|
+| `schedule_id` | `u32` |
+| `timestamp` | `u64` |
+
+### `FeeScheduleActivated`
+
+Emitted after successful `activate_fee_schedule`.
+
+Topics:
+
+| Index | Field | Type | Value |
+|---:|---|---|---|
+| 0 | fixed event topic | `Symbol` | `fee_schedule_activated` |
+| 1 | `name` | `Symbol` | `fee_act` |
+| 2 | `invoice_id` | `Symbol` | Escrow invoice id |
+
+Data:
+
+| Field | Type |
+|---|---|
+| `schedule_id` | `u32` |
+| `timestamp` | `u64` |
 
 ### `FundingCancelled`
 
@@ -391,7 +455,7 @@ Data:
 
 | Field | Type |
 |---|---|
-| `funded_amount` | `i128` |
+| `timestamp` | `u64` |
 
 ### `InvestorRefundedEvt`
 
@@ -403,14 +467,33 @@ Topics:
 |---:|---|---|---|
 | 0 | fixed event topic | `Symbol` | `investor_refunded_evt` |
 | 1 | `name` | `Symbol` | `refunded` |
-| 2 | `investor` | `Address` | Refunded investor |
-| 3 | `invoice_id` | `Symbol` | Escrow invoice id |
+| 2 | `invoice_id` | `Symbol` | Escrow invoice id |
+| 3 | `investor` | `Address` | Refunded investor |
 
 Data:
 
 | Field | Type |
 |---|---|
 | `amount` | `i128` |
+| `timestamp` | `u64` |
+
+### `EscrowUnfunded`
+
+Emitted after successful `unfund`.
+
+Topics:
+
+| Index | Field | Type | Value |
+|---:|---|---|---|
+| 0 | fixed event topic | `Symbol` | `escrow_unfunded` |
+| 1 | `name` | `Symbol` | `unfund` |
+| 2 | `invoice_id` | `Symbol` | Escrow invoice id |
+
+Data:
+
+| Field | Type |
+|---|---|
+| `timestamp` | `u64` |
 
 ### `TreasuryDustSwept`
 
@@ -422,14 +505,14 @@ Topics:
 |---:|---|---|---|
 | 0 | fixed event topic | `Symbol` | `treasury_dust_swept` |
 | 1 | `name` | `Symbol` | `dust_sw` |
+| 2 | `invoice_id` | `Symbol` | Escrow invoice id |
 
 Data:
 
 | Field | Type |
 |---|---|
-| `invoice_id` | `Symbol` |
-| `token` | `Address` |
 | `amount` | `i128` |
+| `timestamp` | `u64` |
 
 ### `PrimaryAttestationBound`
 
@@ -441,13 +524,14 @@ Topics:
 |---:|---|---|---|
 | 0 | fixed event topic | `Symbol` | `primary_attestation_bound` |
 | 1 | `name` | `Symbol` | `att_bind` |
+| 2 | `invoice_id` | `Symbol` | Escrow invoice id |
 
 Data:
 
 | Field | Type |
 |---|---|
-| `invoice_id` | `Symbol` |
-| `digest` | `BytesN<32>` |
+| `hash` | `BytesN<32>` |
+| `timestamp` | `u64` |
 
 ### `AttestationDigestAppended`
 
@@ -459,19 +543,18 @@ Topics:
 |---:|---|---|---|
 | 0 | fixed event topic | `Symbol` | `attestation_digest_appended` |
 | 1 | `name` | `Symbol` | `att_app` |
+| 2 | `invoice_id` | `Symbol` | Escrow invoice id |
 
 Data:
 
 | Field | Type |
 |---|---|
-| `invoice_id` | `Symbol` |
-| `index` | `u32` |
 | `digest` | `BytesN<32>` |
+| `timestamp` | `u64` |
 
 ### `AttestationDigestRevoked`
 
-Emitted after successful `revoke_attestation_digest`. Marks a previously appended
-digest as superseded without deleting the original entry from the append log.
+Emitted after successful `revoke_attestation_digest` or `revoke_attestation_digests`.
 
 Topics:
 
@@ -480,15 +563,17 @@ Topics:
 | 0 | fixed event topic | `Symbol` | `attestation_digest_revoked` |
 | 1 | `name` | `Symbol` | `att_rev` |
 | 2 | `invoice_id` | `Symbol` | Escrow invoice id |
-| 3 | `index` | `u32` | Revoked attestation index |
 
-Data: empty map; this struct has no non-topic fields.
+Data:
+
+| Field | Type |
+|---|---|
+| `digest` | `BytesN<32>` |
+| `timestamp` | `u64` |
 
 ### `AttestationDigestUnrevoked`
 
-Emitted after successful `unrevoke_attestation_digest`. Reverses a prior
-revocation for the given append-log index without altering the original digest
-entry.
+Emitted after successful `unrevoke_attestation_digest`.
 
 Topics:
 
@@ -497,9 +582,13 @@ Topics:
 | 0 | fixed event topic | `Symbol` | `attestation_digest_unrevoked` |
 | 1 | `name` | `Symbol` | `att_unrev` |
 | 2 | `invoice_id` | `Symbol` | Escrow invoice id |
-| 3 | `index` | `u32` | Unrevoked attestation index |
 
-Data: empty map; this struct has no non-topic fields.
+Data:
+
+| Field | Type |
+|---|---|
+| `digest` | `BytesN<32>` |
+| `timestamp` | `u64` |
 
 ### `AllowlistEnabledChanged`
 
@@ -511,18 +600,18 @@ Topics:
 |---:|---|---|---|
 | 0 | fixed event topic | `Symbol` | `allowlist_enabled_changed` |
 | 1 | `name` | `Symbol` | `al_ena` |
+| 2 | `invoice_id` | `Symbol` | Escrow invoice id |
 
 Data:
 
-| Field | Type | Values |
-|---|---|---|
-| `invoice_id` | `Symbol` | Escrow invoice id |
-| `active` | `u32` | `1` = enabled, `0` = disabled |
+| Field | Type |
+|---|---|
+| `active` | `bool` |
+| `timestamp` | `u64` |
 
 ### `InvestorAllowlistChanged`
 
-Emitted after successful `set_investor_allowlisted`. The batch entrypoint
-`set_investors_allowlisted` emits one event per investor in input order.
+Emitted after successful `set_investor_allowlisted` or `set_investors_allowlisted`.
 
 Topics:
 
@@ -530,79 +619,12 @@ Topics:
 |---:|---|---|---|
 | 0 | fixed event topic | `Symbol` | `investor_allowlist_changed` |
 | 1 | `name` | `Symbol` | `al_set` |
+| 2 | `invoice_id` | `Symbol` | Escrow invoice id |
+| 3 | `investor` | `Address` | Affected investor |
 
 Data:
 
-| Field | Type | Values |
-|---|---|---|
-| `invoice_id` | `Symbol` | Escrow invoice id |
-| `investor` | `Address` | Updated investor |
-| `allowed` | `u32` | `1` = allowed, `0` = blocked |
-
-## Nested Types
-
-### `InvoiceEscrow`
-
-Used in `EscrowInitialized.escrow`.
-
 | Field | Type |
 |---|---|
-| `invoice_id` | `Symbol` |
-| `admin` | `Address` |
-| `sme_address` | `Address` |
-| `amount` | `i128` |
-| `funding_target` | `i128` |
-| `funded_amount` | `i128` |
-| `yield_bps` | `i64` |
-| `maturity` | `u64` |
-| `status` | `u32` |
-
-Status values:
-
-| Value | Meaning |
-|---:|---|
-| 0 | Open |
-| 1 | Funded |
-| 2 | Settled |
-| 3 | Withdrawn |
-| 4 | Cancelled |
-
-## Indexer Notes
-
-- Prefer filtering by `contractId` plus `topic[1] == name` when routing by the
-  StarFund short event symbol. `topic[0]` is the generated Rust event-struct
-  symbol.
-- Use `(ledger, txHash, eventIndex)` as the idempotency cursor, as described in
-  `docs/escrow-indexer.md`.
-- Some useful correlation fields are data fields rather than topics:
-  `CollateralRecordedEvt.invoice_id`, `TreasuryDustSwept.invoice_id`,
-  `PrimaryAttestationBound.invoice_id`, `AttestationDigestAppended.invoice_id`,
-  `AllowlistEnabledChanged.invoice_id`, and
-  `InvestorAllowlistChanged.invoice_id`.
-- Do not treat collateral or attestation events as proof of off-chain custody,
-  KYC status, or legal enforceability. They are metadata/audit records emitted
-  after the corresponding authenticated write succeeds.
-
-## Security And State Invariants
-
-- Events are emitted only after the entrypoint guard checks and storage writes
-  in the successful path.
-- Unauthorized calls, invalid zero/negative amounts, overflow paths,
-  double-spend paths, legal-hold blocks, and invalid state-machine transitions
-  fail before event emission.
-- Investor claim and refund events are deduplicated by persistent markers or
-  contribution zeroing before emission.
-- Event emission is O(1) for all entrypoints except
-  `set_investors_allowlisted` and `revoke_attestation_digests`, which emit O(n)
-  events for `n <= MAX_INVESTOR_ALLOWLIST_BATCH` and `n <= MAX_ATTESTATION_REVOKE_BATCH`
-  respectively.
-
-## Changelog
-
-| Date | Version | Change |
-|---|---|---|
-| 2026-03-23 | v0.1 | Initial event schema reference |
-| 2026-05-27 | v0.2 | Added initialization references and investor-cap event notes |
-| 2026-05-31 | v0.3 | Issue #272: replaced drifted reference with complete `#[contractevent]` topic and data layout from `escrow/src/lib.rs` |
-| 2026-06-24 | v0.4 | Added `settled_at_ledger_timestamp` field to `EscrowSettled` event; added `is_settleable` view |
-| 2026-07-27 | v0.5 | Added `AttestationDigestUnrevoked` event for `unrevoke_attestation_digest`; updated `AttestationDigestRevoked` to include `revoke_attestation_digests` |
+| `allowed` | `bool` |
+| `timestamp` | `u64` |

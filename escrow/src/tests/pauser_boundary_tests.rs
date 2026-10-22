@@ -46,9 +46,8 @@ fn setup_escrow(env: &Env) -> (StarfundEscrowClient<'_>, Address, Address) {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     (client, admin, sme)
 }

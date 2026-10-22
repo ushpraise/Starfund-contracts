@@ -48,9 +48,8 @@ fn init_escrow<'a>(env: &'a Env) -> Fixture<'a> {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     // Give the escrow the balance it will disburse, so `release`/`withdraw` can transfer.
     sac_admin.mint(&contract, &TARGET);
@@ -125,6 +124,8 @@ fn funding_records_expose_named_struct_fields() {
     let page = client.get_funding_records(&0u32, &10u32);
 
     assert_eq!(page.len(), 3);
+    // Older positions without the additive historical-total key fall back to the live balance.
+    assert_eq!(client.get_total_deposited(&a), 1_000i128);
     for record in page.iter() {
         let as_struct = FundingRecord {
             investor: record.investor.clone(),
@@ -314,9 +315,8 @@ fn open_floor_escrow(env: &Env, initial_floor: i128) -> (crate::StarfundEscrowCl
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     (client, admin)
 }
 

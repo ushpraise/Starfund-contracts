@@ -7,7 +7,7 @@
 //! its exact threshold.
 
 use super::{assert_contract_error, deploy, StarfundEscrowClient, TARGET};
-use crate::{EscrowError, YieldResolution, YieldTier};
+use crate::{DataKey, EscrowError, YieldResolution, YieldTier};
 use soroban_sdk::{testutils::Address as _, Address, Env, String, Vec as SorobanVec};
 
 const BOUNDED_TIER_COUNT_PROBE: u32 = 64;
@@ -44,9 +44,8 @@ fn init_with_tiers<'a>(
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     client
 }
 
@@ -76,8 +75,7 @@ fn assert_init_error(
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
+
     );
     assert_contract_error(result, expected);
 }
@@ -165,6 +163,18 @@ fn test_tier_table_accepts_zero_and_single_entry_lengths() {
     let empty = SorobanVec::new(&empty_env);
     let empty_client = init_with_tiers(&empty_env, 0, Some(empty));
     assert_eq!(empty_client.get_yield_tiers().len(), 0);
+    assert!(!empty_env.as_contract(&empty_client.address, || {
+        empty_env.storage().instance().has(&DataKey::YieldTierTable)
+    }));
+
+    let absent_env = Env::default();
+    let absent_client = init_with_tiers(&absent_env, 0, None);
+    assert!(!absent_env.as_contract(&absent_client.address, || {
+        absent_env
+            .storage()
+            .instance()
+            .has(&DataKey::YieldTierTable)
+    }));
 
     let single_env = Env::default();
     let single = SorobanVec::from_array(&single_env, [tier(1, 0)]);

@@ -46,9 +46,8 @@ fn deploy_escrow<'a>(
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     (client, admin, sme, id)
 }
 
@@ -233,7 +232,7 @@ fn test_callback_replay_rejected() {
 }
 
 // -----------------------------------------------------------------------------
-// Edge case 5: Callback after cancellation
+// Edge case 5: Callback after cancellation / terminal state
 // -----------------------------------------------------------------------------
 
 #[test]
@@ -249,19 +248,134 @@ fn test_callback_after_cancellation_rejected() {
     assert_eq!(nonce, 1);
 
     // Cancel funding (transitions status to 4)
-    client.cancel_funding();
+    client.cancel_funding(&0u32);
     assert_eq!(client.get_escrow().status, 4);
+    assert_eq!(client.get_callback(&nonce), None);
 
-    // Attempt callback execution after cancellation
+    // Attempt callback execution after cancellation — still uses CallbackAfterCancellation
     assert_contract_error(
         client.try_execute_callback(&nonce, &origin, &phase),
         EscrowError::CallbackAfterCancellation,
     );
 
-    // Attempt registering a new callback on cancelled escrow must also fail
+    // Attempt registering a new callback on cancelled escrow must fail with
+    // CallbackOnTerminalEscrow (covers status 4 via the active-states guard).
     assert_contract_error(
         client.try_register_callback(&origin, &phase),
-        EscrowError::CallbackAfterCancellation,
+        EscrowError::CallbackOnTerminalEscrow,
+    );
+}
+
+/// register_callback must reject status 2 (Settled) with CallbackOnTerminalEscrow.
+#[test]
+fn test_register_callback_on_settled_escrow_rejected() {
+    let env = Env::default();
+    env.mock_all_auths_allowing_non_root_auth();
+
+    // Use a real token so we can fund and settle.
+    let sac = env.register_stellar_asset_contract_v2(Address::generate(&env));
+    let token_id = sac.address();
+    let sac_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token_id);
+
+    let escrow_id = env.register(StarfundEscrow, ());
+    let client = StarfundEscrowClient::new(&env, &escrow_id);
+    let admin = Address::generate(&env);
+    let sme = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let investor = Address::generate(&env);
+    let target = 1_000i128;
+
+    client.init(
+        &admin,
+        &String::from_str(&env, "INV_CB_S2"),
+        &sme,
+        &target,
+        &800i64,
+        &0u64,
+        &token_id,
+        &None,
+        &treasury,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None::<i64>,
+        &None::<u32>,
+    );
+
+    sac_admin.mint(&investor, &target);
+    client.fund(&investor, &target);
+    assert_eq!(client.get_escrow().status, 1);
+
+    // Settle: inject enough tokens and settle (maturity=0 is already past)
+    sac_admin.mint(&escrow_id, &target);
+    client.settle();
+    assert_eq!(client.get_escrow().status, 2);
+
+    let origin = Address::generate(&env);
+    assert_contract_error(
+        client.try_register_callback(&origin, &1u32),
+        EscrowError::CallbackOnTerminalEscrow,
+    );
+}
+
+/// register_callback must reject status 3 (Withdrawn) with CallbackOnTerminalEscrow.
+#[test]
+fn test_register_callback_on_withdrawn_escrow_rejected() {
+    let env = Env::default();
+    env.mock_all_auths_allowing_non_root_auth();
+
+    let sac = env.register_stellar_asset_contract_v2(Address::generate(&env));
+    let token_id = sac.address();
+    let sac_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token_id);
+
+    let escrow_id = env.register(StarfundEscrow, ());
+    let client = StarfundEscrowClient::new(&env, &escrow_id);
+    let admin = Address::generate(&env);
+    let sme = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let investor = Address::generate(&env);
+    let target = 1_000i128;
+
+    client.init(
+        &admin,
+        &String::from_str(&env, "INV_CB_S3"),
+        &sme,
+        &target,
+        &800i64,
+        &0u64,
+        &token_id,
+        &None,
+        &treasury,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None::<i64>,
+        &None::<u32>,
+    );
+
+    sac_admin.mint(&investor, &target);
+    client.fund(&investor, &target);
+    assert_eq!(client.get_escrow().status, 1);
+
+    // Mint tokens into escrow and withdraw (status 1 → 3)
+    sac_admin.mint(&escrow_id, &target);
+    client.withdraw();
+    assert_eq!(client.get_escrow().status, 3);
+
+    let origin = Address::generate(&env);
+    assert_contract_error(
+        client.try_register_callback(&origin, &1u32),
+        EscrowError::CallbackOnTerminalEscrow,
     );
 }
 

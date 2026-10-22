@@ -98,15 +98,17 @@ Returns the current count of distinct funders.
 Admin-only: raises the per-deposit minimum while the escrow is open (status `0`). The new floor
 must be positive and strictly greater than the current floor. Emits `MinContributionFloorRaised`.
 
-#### `lower_min_contribution_floor(env: Env, new_floor: i128) -> i128`
+#### `lower_min_contribution_floor(env: Env, new_floor: i128, expected_nonce: u32) -> i128`
 
 Admin-only: lowers the per-deposit minimum while the escrow is open (status `0`). The new floor
-must be positive and strictly less than the current floor. Emits `MinContributionFloorLowered`.
+must be positive and strictly less than the current floor. Requires the current admin nonce to
+prevent replayed configuration updates. Emits `MinContributionFloorLowered`.
 
-#### `raise_max_per_investor(env: Env, new_cap: i128) -> i128`
+#### `raise_max_per_investor(env: Env, new_cap: i128, expected_nonce: u32) -> i128`
 
 Admin-only: raises an already-configured per-investor cap while the escrow is open. The new cap
-must be strictly greater than the current cap. Emits `MaxPerInvestorCapRaised`.
+must be strictly greater than the current cap. Requires the current admin nonce to prevent replayed
+configuration updates. Emits `MaxPerInvestorCapRaised`.
 
 #### `lower_max_per_investor(env: Env, new_cap: i128) -> i128`
 
@@ -114,22 +116,24 @@ Admin-only: lowers an already-configured per-investor cap while the escrow is op
 must be positive and strictly less than the current cap. The lower cap applies to subsequent
 deposits; existing principal is not changed. Emits `MaxPerInvestorCapLowered`.
 
-#### `lower_max_unique_investors(env: Env, new_cap: u32) -> u32`
+#### `lower_max_unique_investors(env: Env, new_cap: u32, expected_nonce: u32) -> u32`
 
 Admin-only: reduces the configured cap while the escrow is **open** (status `0`).
 
 - Requires admin authorization.
+- Requires the current admin nonce to prevent replayed configuration updates.
 - Only permitted when a cap was configured at init.
 - `new_cap` must satisfy `unique_funder_count <= new_cap < old_cap`.
 - Rejects raising the cap or imposing a cap on an unlimited escrow.
 - Emits `MaxUniqueInvestorsCapLowered` (`inv_cap`) for indexers.
 - Returns the stored cap after update (same as `get_max_unique_investors_cap()`).
 
-#### `raise_max_unique_investors(env: Env, new_cap: u32) -> u32`
+#### `raise_max_unique_investors(env: Env, new_cap: u32, expected_nonce: u32) -> u32`
 
 Admin-only: increases the configured cap while the escrow is **open** (status `0`).
 
 - Requires admin authorization.
+- Requires the current admin nonce to prevent replayed configuration updates.
 - Only permitted when a cap was configured at init.
 - `new_cap` must satisfy `new_cap > old_cap`.
 - Emits `MaxUniqueInvestorsCapRaised` (`raise_cap`) for indexers.

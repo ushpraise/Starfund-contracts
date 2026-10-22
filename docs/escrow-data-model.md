@@ -57,6 +57,7 @@ with `unwrap_or(0)`.
 | `PrimaryAttestationHash` | `BytesN<32>` | `bind_primary_attestation_hash` | Single-set; panics on second call |
 | `AttestationAppendLog` | `Vec<BytesN<32>>` | `append_attestation_digest` | Bounded by `MAX_ATTESTATION_APPEND_ENTRIES` (32) |
 | `SettledAt` | `u64` | `settle` on status 1→2 transition | Write-once; `None` before settlement; legacy-safe |
+| `PartialSettledAt` | `u64` | `partial_settle` on status 0→1 transition | Write-once; `None` unless funding was closed early; legacy-safe |
 | `FundingDeadline` | `u64` | `init` (when `funding_deadline` arg is `Some`) | Ledger timestamp; new funds rejected after this |
 
 ### Per-address investor keys in persistent storage
@@ -70,10 +71,12 @@ storage slot and TTL.
 | `InvestorClaimed(Address)` | `bool` | `claim_investor_payout` | `false` |
 | `InvestorEffectiveYield(Address)` | `i64` (bps) | `fund_impl` on first deposit | `InvoiceEscrow::yield_bps` |
 | `InvestorClaimNotBefore(Address)` | `u64` (ledger timestamp) | `fund_impl` on first deposit | `0` (no gate) |
+| `InvestorCommittedLockSecs(Address)` | `u64` (seconds) | `fund_impl` on first deposit | `0` for simple-fund and legacy positions |
 | `InvestorRefunded(Address)` | `bool` | `refund` | `false` |
 
-The contribution, yield, and claim-gate keys are written together on an investor's first `fund` or
-`fund_with_commitment` call. Subsequent `fund` calls update only `InvestorContribution`.
+The contribution, yield, claim-gate, and original-lock keys are written together on an investor's
+first `fund` or `fund_with_commitment` call. Subsequent `fund` calls preserve the yield and lock
+metadata while updating the contribution.
 
 ### Per-address allowlist keys in persistent storage
 
@@ -135,6 +138,7 @@ with three metadata families so callers obtain a complete view in a single host 
 ```rust
 pub struct EscrowSummary {
     pub escrow: InvoiceEscrow,
+    pub status_classification: EscrowStatus,
     pub has_maturity_lock: bool,
     pub legal_hold: bool,
     pub funding_close_snapshot: EscrowCloseSnapshot,
@@ -149,6 +153,9 @@ pub struct EscrowSummary {
 }
 ```
 
+- `status_classification` — maps status codes `0..=4` to `Open`, `Funded`, `Settled`,
+  `Withdrawn`, and `Cancelled`; any other code returns `Unknown(code)` without losing the
+  original discriminant.
 - `sme_collateral_commitment` — pulled from `DataKey::SmeCollateralPledge`; `None` when never recorded.
 - `has_primary_attestation` — `true` when `DataKey::PrimaryAttestationHash` is present.
 - `attestation_log_length` — length of the `Vec` stored at `DataKey::AttestationAppendLog`; `0` when absent.

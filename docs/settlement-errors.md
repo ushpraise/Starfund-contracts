@@ -141,6 +141,10 @@ conditions are true simultaneously.
 9. Payout > 0 check → `PayoutZero` (170)
 10. Token transfer → codes 36–41
 
+An address with no contribution, or a zero contribution after fully unfunding before funding
+closes, is rejected at step 4. The call does not set `InvestorClaimed`, emit a payout event, or
+invoke the token transfer.
+
 ---
 
 ## Escrow-status reference

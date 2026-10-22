@@ -99,12 +99,12 @@ fn test_release_unauthorized() {
 }
 
 /// Helper to init and fund an escrow with protocol fees
-fn init_and_fund_with_protocol_fee(
-    env: &Env,
+fn init_and_fund_with_protocol_fee<'a>(
+    env: &'a Env,
     target: i128,
     invoice_id: &str,
     protocol_fee_bps: i64,
-) -> (StarfundEscrowClient<'_>, Address, Address, Address, Address) {
+) -> (StarfundEscrowClient<'a>, Address, Address, Address, Address) {
     let sac = env.register_stellar_asset_contract_v2(Address::generate(env));
     let token_id = sac.address();
     let sac_admin = StellarAssetClient::new(env, &token_id);

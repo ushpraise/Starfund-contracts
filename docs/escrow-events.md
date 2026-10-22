@@ -16,6 +16,28 @@ All events follow the Soroban `contractevent` format. Key fields like `invoice_i
 
 ## 📋 Event Catalog
 
+### `FeeScheduleSubmitted`
+Emitted when the admin successfully stages a pending fee schedule. Re-submitting the identical
+pending schedule is idempotent and emits no additional event.
+
+**Topics:**
+1. `fee_sub` (Symbol)
+2. `invoice_id` (Symbol)
+
+**Data Payload:**
+- `schedule` (`FeeSchedule`)
+
+### `FeeScheduleActivated`
+Emitted when a pending fee schedule is promoted at or after its activation ledger.
+
+**Topics:**
+1. `fee_act` (Symbol)
+2. `invoice_id` (Symbol)
+
+**Data Payload:**
+- `schedule` (`FeeSchedule`) — newly active schedule.
+- `previous` (`Option<FeeSchedule>`) — schedule active before promotion, if any.
+
 ### `EscrowInitialized`
 Emitted once by `init()`. Carries the escrow snapshot plus immutable bound references so
 indexers can register `funding_token`, `treasury`, and optional `registry` without follow-up reads.
@@ -130,7 +152,7 @@ Emitted when the SME finalizes the escrow after maturity.
 - `yield_bps` (i64)
 - `maturity` (u64)
 - `settled_at_ledger_timestamp` (u64) — the ledger timestamp when `settle` was called
-- `settle_pool` (i128) — realized settlement pool: `total_principal + floor(total_principal × yield_bps / 10_000)`. Computed from `FundingCloseSnapshot.total_principal` using the same checked arithmetic as `compute_investor_payout`. Zero on legacy escrows that pre-date the snapshot key.
+- `settle_pool` (i128) — nominal base-yield settlement pool: `total_principal + floor(total_principal × yield_bps / 10_000)`. The exact aggregate claim liability, including minimum-coupon units, is returned by `get_settlement_pool()`.
 
 **Example (JSON Decoded):**
 ```json
@@ -146,6 +168,18 @@ Emitted when the SME finalizes the escrow after maturity.
 }
 ```
 
+### `EscrowPartialSettle`
+Emitted when the SME or admin closes funding early and the escrow transitions from open to funded.
+
+**Topics:**
+1. `part_set` (Symbol)
+2. `invoice_id` (Symbol)
+
+**Data Payload:**
+- `funded_amount` (`i128`) — principal recorded when funding was closed.
+- `partial_settled_at_ledger_timestamp` (`u64`) — ledger timestamp written to
+  `DataKey::PartialSettledAt` and returned by `get_partial_settled_at`.
+
 ### `InvestorPayoutClaimed`
 Emitted when an investor records their payout claim.
 
@@ -156,12 +190,18 @@ Emitted when an investor records their payout claim.
 
 **Data:**
 1. `payout` (i128) — gross payout transferred to the investor
+2. `effective_yield_bps` (i64) — investor-specific annualized yield used to calculate the payout
+3. `commitment_lock_secs` (u64) — original lock duration committed on the investor's first deposit
 
 **Example (JSON Decoded):**
 ```json
 {
   "topics": ["inv_claim", "INV_001", "G...INVESTOR"],
-  "data": { "payout": "80000000" }
+  "data": {
+    "payout": "80000000",
+    "effective_yield_bps": 900,
+    "commitment_lock_secs": 100
+  }
 }
 ```
 
@@ -288,7 +328,7 @@ has changed. **This event carries no settlement authority** — it exists purely
 indexers can re-sync their local pointer without polling the contract.
 
 **Topics:**
-1. `reg_rebind` (Symbol)
+1. `reg_rebd` (Symbol)
 2. `invoice_id` (Symbol)
 
 **Data Payload:**
@@ -308,7 +348,7 @@ to verify on-chain state.
 **Example (JSON Decoded):**
 ```json
 {
-  "topics": ["reg_rebind", "INV_001"],
+  "topics": ["reg_rebd", "INV_001"],
   "data": {
     "registry": "CREG..."
   }

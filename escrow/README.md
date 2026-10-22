@@ -158,12 +158,13 @@ invariants:
       - test::test_init_sets_initialized_flag
 ```
 
-### `raise_max_per_investor(new_cap: i128)`
+### `raise_max_per_investor(new_cap: i128, expected_nonce: u32)`
 
 Admin-only entrypoint to raise the per-investor contribution cap while the escrow is open.
 
 - **Requires**: escrow status is `Open` (0), caller is admin, cap was configured at init
-- **Enforces**: `new_cap` must be strictly greater than current cap (raise-only)
+- **Enforces**: `new_cap` must be strictly greater than current cap, no greater than the
+  funding target, and no lower than the minimum contribution floor
 - **Emits**: `MaxPerInvestorCapRaised` event with old and new values
 - **Effect**: Subsequent deposits are validated against the new higher cap; existing investors may add more principal up to the new limit
 
@@ -174,8 +175,10 @@ This is the symmetric counterpart to `lower_max_unique_investors` — it allows 
 | Invariant | Enforcement |
 |-----------|-------------|
 | Raise-only | `new_cap > old_cap` else `MaxPerInvestorCapNotRaised` |
+| Target bound | Rejects caps above the funding target (`PerInvestorCapExceedsFundingTarget`) |
+| Floor bound | Rejects caps below the minimum contribution floor (`PerInvestorCapBelowMinContributionFloor`) |
 | Configured-only | Rejects when no cap was set at init (`MaxPerInvestorCapNotConfigured`) |
-| Open-only | Rejects when escrow status != 0 (`CapLowerNotOpen`) |
+| Open-only | Rejects when escrow status != 0 (`EscrowNotOpenForFunding`) |
 | Admin-only | `load_escrow_require_admin` gates auth before any state change |
   - id: ESC-CAP-002
     name: per_investor_cap_raise_only
@@ -561,4 +564,3 @@ Use as a human gate; not a substitute for professional audit.
 - [ ] Maturity and claim-lock semantics use ledger time only (see `lib.rs` rustdoc).
 - [ ] `migrate` is understood to panic on all paths; redeploy policy is confirmed.
 - [ ] CI: `cargo fmt --all -- --check`, `cargo test`, `cargo llvm-cov --features testutils --fail-under-lines 95` pass.
-

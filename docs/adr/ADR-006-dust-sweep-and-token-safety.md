@@ -21,20 +21,20 @@ The original design relied on off-chain reconciliation to ensure sweeps only tou
 2. `amount <= MAX_DUST_SWEEP_AMOUNT` (100,000,000 base units) — caps blast radius per call.
 3. Legal hold blocks the sweep.
 4. Treasury auth required.
-5. **Liability floor (new):** the sweep is rejected if it would reduce the contract balance below outstanding investor liabilities.
+5. **Liability floor:** for withdrawn and cancelled escrows, the sweep is rejected if it would reduce the contract balance below undistributed principal.
 
 ### Liability floor invariant
 
-The floor only applies in **cancelled (status 4)** escrows, where `refund` is the on-chain redemption path. In settled (2) and withdrawn (3) states, disbursement is off-chain and `distributed_principal` stays `0`, so the floor is not applicable.
+The floor applies in **withdrawn (status 3)** escrows, where `release` and `withdraw` distribute principal, and in **cancelled (status 4)** escrows, where `refund` returns principal. Settled (status 2) escrows use the investor claim path and do not apply this principal floor.
 
 ```
 outstanding = funded_amount - distributed_principal
-assert balance - sweep_amt >= outstanding   [only when status == 4]
+assert balance - sweep_amt >= outstanding   [when status == 3 or 4]
 ```
 
-`DataKey::DistributedPrincipal` is a running total incremented atomically by `refund` each time an investor's principal is returned. This makes the invariant computable on-chain without iterating over all investor addresses.
+`DataKey::DistributedPrincipal` is a running total incremented atomically by `release`, `withdraw`, and `refund` as principal is distributed. This makes the invariant computable on-chain without iterating over all investor addresses.
 
-- In a **settled** or **withdrawn** escrow, `funded_amount` reflects the total principal committed. If the integration has not yet disbursed principal off-chain, `distributed_principal` remains `0` and `outstanding == funded_amount`. The sweep is blocked until the balance genuinely exceeds liabilities.
+- In a **withdrawn** escrow, the floor preserves any principal not yet distributed; after the complete withdrawal, `distributed_principal == funded_amount` and `outstanding == 0`.
 - In a **cancelled** escrow, each `refund` call increments `distributed_principal`, reducing `outstanding`. Once all investors are refunded, `outstanding == 0` and any remaining balance is true dust.
 
 All token transfers go through `external_calls::transfer_funding_token_with_balance_checks`, which:
