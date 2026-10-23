@@ -1168,6 +1168,10 @@ pub enum EscrowError {
     NothingToWithdraw = 299,
     /// [`StarfundEscrow::cancel_funding`] called while a dispute remains active.
     DisputeBlocksCancelFunding = 267,
+    /// [`StarfundEscrow::unfund`] would leave a non-zero residual contribution below
+    /// the configured `min_contribution_floor`.  Either unfund the full remaining
+    /// contribution or keep the residual at or above the floor.
+    ResidualContributionBelowFloor = 268,
     /// [`StarfundEscrow::init`] assigned the same address to two or more distinct roles.
     RoleAddressesMustBeDistinct = 268,
     /// [`StarfundEscrow::partial_settle`] called while `funded_amount == 0`.
@@ -4175,6 +4179,12 @@ impl StarfundEscrow {
     /// - Space Complexity: O(1) in-memory logic.
     pub fn get_remaining_funding_capacity(env: Env) -> i128 {
         let escrow = Self::get_escrow(env);
+        // Non-open escrows (status != 0) reject all further funding attempts, so
+        // reporting positive remaining capacity would mislead callers.  Return 0
+        // for any status other than Open (0).
+        if escrow.status != 0 {
+            return 0;
+        }
         escrow
             .funding_target
             .saturating_sub(escrow.funded_amount)
@@ -4464,6 +4474,14 @@ impl StarfundEscrow {
 
     /// Check if funding has expired (deadline set and now > deadline).
     pub fn is_funding_expired(env: Env) -> bool {
+        // Funding expiration is only meaningful while the escrow is still open.
+        // A successfully funded (status 1), settled (status 2), or cancelled
+        // (status 4) escrow must not report as expired — that would mislead
+        // indexers into categorising successful campaigns as failures.
+        let escrow = Self::get_escrow(env.clone());
+        if escrow.status != 0 {
+            return false;
+        }
         if let Some(deadline) = env.storage().instance().get(&keys::funding_deadline()) {
             env.ledger().timestamp() > deadline
         } else {
@@ -5674,6 +5692,13 @@ impl StarfundEscrow {
     }
 
     fn settleable_now(env: &Env) -> bool {
+        // Check the operational circuit breaker first: mirrors the guard in
+        // `settle` so that `is_settleable` and `get_settlement_readiness` are
+        // authoritative pre-flight checks for external callers.
+        if Self::paused_blocks(env, PauseEntry::Settlement) {
+            return false;
+        }
+        if Self::legal_hold_active(env) {
         if Self::paused_blocks(env, PauseEntry::Settlement)
             || Self::legal_hold_active(env)
             || Self::is_dispute_active(env.clone())
@@ -10183,6 +10208,8 @@ impl StarfundEscrow {
     /// - [`EscrowError::UnfundLegalHoldActive`] if a compliance hold is currently active.
     /// - [`EscrowError::UnfundAmountNotPositive`] if `amount <= 0`.
     /// - [`EscrowError::OverWithdrawal`] if `amount` exceeds the investor's contribution.
+    /// - [`EscrowError::ResidualContributionBelowFloor`] if the residual contribution after
+    ///   the unfund would be non-zero but below the configured `min_contribution_floor`.
     ///
     /// # Events
     /// Emits [`EscrowUnfunded`] on success.
@@ -10213,6 +10240,18 @@ impl StarfundEscrow {
         let remaining_contribution = contribution
             .checked_sub(amount)
             .unwrap_or_else(|| fail(&env, EscrowError::OverWithdrawal));
+
+        // 4a. Min-contribution-floor guard: if a floor is configured and the
+        // residual would be non-zero but below the floor, reject the partial
+        // unfund.  A full unfund (remaining == 0) is always permitted.
+        let floor = Self::get_min_contribution_floor(env.clone());
+        if remaining_contribution > 0 && floor > 0 {
+            ensure(
+                &env,
+                remaining_contribution >= floor,
+                EscrowError::ResidualContributionBelowFloor,
+            );
+        }
 
         // 5. funded_amount decrement.
         let new_funded_amount = escrow

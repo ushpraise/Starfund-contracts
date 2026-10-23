@@ -878,3 +878,107 @@ fn cancel_funding_succeeds_after_unpause() {
     let escrow = client.cancel_funding(&0u32);
     assert_eq!(escrow.status, 4u32);
 }
+
+// ─── Wave 10 #229: settleable_now respects PauseEntry::Settlement ────────────
+
+/// `is_settleable` returns false while a Settlement-scoped pause is active.
+#[test]
+fn is_settleable_false_during_settlement_pause() {
+    let env = Env::default();
+    let (client, admin, sme) = setup(&env);
+    let investor = Address::generate(&env);
+    init_funded(&client, &env, &admin, &sme, &investor, "PAU_229_A");
+
+    // Confirm it would be settleable before the pause (no maturity).
+    assert!(client.is_settleable(), "should be settleable before pause");
+
+    // Activate a Settlement-scoped pause.
+    client.set_paused(&true, &PauseScope::Settlement, &PauseReason::Incident);
+
+    assert!(
+        !client.is_settleable(),
+        "is_settleable must return false during Settlement pause"
+    );
+}
+
+/// `get_settlement_readiness().ready_now` is false while Settlement is paused.
+#[test]
+fn settlement_readiness_ready_now_false_during_settlement_pause() {
+    let env = Env::default();
+    let (client, admin, sme) = setup(&env);
+    let investor = Address::generate(&env);
+    init_funded(&client, &env, &admin, &sme, &investor, "PAU_229_B");
+
+    client.set_paused(&true, &PauseScope::Settlement, &PauseReason::Incident);
+
+    let readiness = client.get_settlement_readiness();
+    assert!(
+        !readiness.ready_now,
+        "ready_now must be false during Settlement pause"
+    );
+    assert!(
+        !readiness.is_settleable,
+        "is_settleable must be false during Settlement pause"
+    );
+}
+
+/// After the Settlement pause is lifted, `is_settleable` returns true again
+/// (assuming status 1 and no maturity constraint).
+#[test]
+fn is_settleable_true_after_settlement_pause_lifted() {
+    let env = Env::default();
+    let (client, admin, sme) = setup(&env);
+    let investor = Address::generate(&env);
+    init_funded(&client, &env, &admin, &sme, &investor, "PAU_229_C");
+
+    client.set_paused(&true, &PauseScope::Settlement, &PauseReason::Incident);
+    assert!(!client.is_settleable(), "should be blocked during pause");
+
+    // Lift the pause.
+    client.set_paused(&false, &PauseScope::Settlement, &PauseReason::Incident);
+
+    assert!(
+        client.is_settleable(),
+        "is_settleable must be true after pause is lifted"
+    );
+}
+
+/// An All-scope pause also blocks settlement readiness.
+#[test]
+fn is_settleable_false_during_all_scope_pause() {
+    let env = Env::default();
+    let (client, admin, sme) = setup(&env);
+    let investor = Address::generate(&env);
+    init_funded(&client, &env, &admin, &sme, &investor, "PAU_229_D");
+
+    client.set_paused(&true, &PauseScope::All, &PauseReason::Incident);
+
+    assert!(
+        !client.is_settleable(),
+        "is_settleable must return false during All-scope pause"
+    );
+    assert!(
+        !client.get_settlement_readiness().ready_now,
+        "ready_now must be false during All-scope pause"
+    );
+}
+
+/// A Funding-scope pause does NOT block settlement readiness.
+#[test]
+fn is_settleable_unaffected_by_funding_scope_pause() {
+    let env = Env::default();
+    let (client, admin, sme) = setup(&env);
+    let investor = Address::generate(&env);
+    init_funded(&client, &env, &admin, &sme, &investor, "PAU_229_E");
+
+    client.set_paused(&true, &PauseScope::Funding, &PauseReason::Incident);
+
+    assert!(
+        client.is_settleable(),
+        "a Funding-scope pause must not block is_settleable"
+    );
+    assert!(
+        client.get_settlement_readiness().ready_now,
+        "a Funding-scope pause must not set ready_now to false"
+    );
+}

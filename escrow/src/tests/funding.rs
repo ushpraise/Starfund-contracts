@@ -7817,6 +7817,51 @@ fn test_unfund_event_emitted() {
     assert_eq!(*last, expected.to_xdr(&env, &contract_id));
 }
 
+// ── Wave 10 regression tests ──────────────────────────────────────────────────
+
+// ─── #228: get_remaining_funding_capacity returns 0 for non-open escrows ─────
+
+/// Remaining capacity is positive while an escrow is open and underfunded.
+#[test]
+fn remaining_capacity_positive_while_open() {
+    let env = Env::default();
+    let (client, admin, sme) = setup(&env);
+    let (tok, tre) = free_addresses(&env);
+    client.init(
+        &admin,
+        &String::from_str(&env, "W10_228_A"),
+        &sme,
+        &TARGET,
+        &800i64,
+        &0u64,
+        &tok,
+        &None,
+        &tre,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None::<i64>,
+        &None::<u32>,
+    );
+    let investor = Address::generate(&env);
+    client.fund(&investor, &(TARGET / 2));
+    assert_eq!(client.get_remaining_funding_capacity(), TARGET / 2);
+}
+
+/// Once the escrow reaches funded status (status 1) remaining capacity must be 0.
+#[test]
+fn remaining_capacity_zero_when_funded() {
+    let env = Env::default();
+    let (client, admin, sme) = setup(&env);
+    let (tok, tre) = free_addresses(&env);
+    client.init(
+        &admin,
+        &String::from_str(&env, "W10_228_B"),
 #[test]
 fn test_unfund_batch_rejects_duplicate_investor_before_processing_entries() {
     let env = Env::default();
@@ -7830,6 +7875,9 @@ fn test_unfund_batch_rejects_duplicate_investor_before_processing_entries() {
         &TARGET,
         &800i64,
         &0u64,
+        &tok,
+        &None,
+        &tre,
         &token,
         &None,
         &treasury,
@@ -7844,6 +7892,323 @@ fn test_unfund_batch_rejects_duplicate_investor_before_processing_entries() {
         &None::<i64>,
         &None::<u32>,
     );
+    let investor = Address::generate(&env);
+    client.fund(&investor, &TARGET);
+    assert_eq!(client.get_escrow().status, 1, "escrow should be funded");
+    assert_eq!(
+        client.get_remaining_funding_capacity(),
+        0,
+        "capacity must be 0 for a funded escrow"
+    );
+}
+
+/// Cancelled escrow (status 4) must report remaining capacity of 0.
+#[test]
+fn remaining_capacity_zero_when_cancelled() {
+    let env = Env::default();
+    let (client, admin, sme) = setup(&env);
+    let (tok, tre) = free_addresses(&env);
+    client.init(
+        &admin,
+        &String::from_str(&env, "W10_228_C"),
+        &sme,
+        &TARGET,
+        &800i64,
+        &0u64,
+        &tok,
+        &None,
+        &tre,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None::<i64>,
+        &None::<u32>,
+    );
+    let investor = Address::generate(&env);
+    client.fund(&investor, &(TARGET / 2));
+    client.cancel_funding(&0u32);
+    assert_eq!(client.get_escrow().status, 4, "escrow should be cancelled");
+    assert_eq!(
+        client.get_remaining_funding_capacity(),
+        0,
+        "capacity must be 0 for a cancelled escrow"
+    );
+}
+
+// ─── #230: is_funding_expired returns false for non-open escrows ──────────────
+
+/// is_funding_expired is true for an open escrow past the deadline.
+#[test]
+fn is_funding_expired_true_for_open_past_deadline() {
+    let env = Env::default();
+    let (client, admin, sme) = setup(&env);
+    let (tok, tre) = free_addresses(&env);
+    // Set a funding deadline 1 000 seconds from now.
+    let deadline: u64 = 1_000;
+    client.init(
+        &admin,
+        &String::from_str(&env, "W10_230_A"),
+        &sme,
+        &TARGET,
+        &800i64,
+        &2_000u64, // maturity after deadline
+        &tok,
+        &None,
+        &tre,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,            // maturity_max_horizon
+        &Some(deadline),  // funding_deadline
+        &None,
+        &None::<i64>,
+        &None::<u32>,
+    );
+    // Advance time past the deadline.
+    let mut info = env.ledger().get();
+    info.timestamp = deadline + 1;
+    env.ledger().set(info);
+    assert_eq!(client.get_escrow().status, 0);
+    assert!(
+        client.is_funding_expired(),
+        "open escrow past deadline must be expired"
+    );
+}
+
+/// is_funding_expired is false for a funded escrow even after the deadline passes.
+#[test]
+fn is_funding_expired_false_for_funded_escrow_past_deadline() {
+    let env = Env::default();
+    let (client, admin, sme) = setup(&env);
+    let (tok, tre) = free_addresses(&env);
+    let deadline: u64 = 1_000;
+    client.init(
+        &admin,
+        &String::from_str(&env, "W10_230_B"),
+        &sme,
+        &TARGET,
+        &800i64,
+        &2_000u64,
+        &tok,
+        &None,
+        &tre,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,            // maturity_max_horizon
+        &Some(deadline),  // funding_deadline
+        &None,
+        &None::<i64>,
+        &None::<u32>,
+    );
+    let investor = Address::generate(&env);
+    // Fund fully before deadline.
+    client.fund(&investor, &TARGET);
+    assert_eq!(client.get_escrow().status, 1, "escrow should be funded");
+    // Advance time past the deadline.
+    let mut info = env.ledger().get();
+    info.timestamp = deadline + 500;
+    env.ledger().set(info);
+    assert!(
+        !client.is_funding_expired(),
+        "funded escrow must not report as expired even after deadline"
+    );
+}
+
+/// is_funding_expired is false for a cancelled escrow past the deadline.
+#[test]
+fn is_funding_expired_false_for_cancelled_escrow_past_deadline() {
+    let env = Env::default();
+    let (client, admin, sme) = setup(&env);
+    let (tok, tre) = free_addresses(&env);
+    let deadline: u64 = 1_000;
+    client.init(
+        &admin,
+        &String::from_str(&env, "W10_230_C"),
+        &sme,
+        &TARGET,
+        &800i64,
+        &2_000u64,
+        &tok,
+        &None,
+        &tre,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,            // maturity_max_horizon
+        &Some(deadline),  // funding_deadline
+        &None,
+        &None::<i64>,
+        &None::<u32>,
+    );
+    let investor = Address::generate(&env);
+    client.fund(&investor, &(TARGET / 2));
+    client.cancel_funding(&0u32);
+    assert_eq!(client.get_escrow().status, 4, "escrow should be cancelled");
+    let mut info = env.ledger().get();
+    info.timestamp = deadline + 500;
+    env.ledger().set(info);
+    assert!(
+        !client.is_funding_expired(),
+        "cancelled escrow must not report as expired"
+    );
+}
+
+// ─── #231: unfund rejects partial withdrawal leaving residual below floor ─────
+
+/// A full unfund (remaining == 0) is always permitted regardless of the floor.
+#[test]
+fn unfund_full_withdrawal_always_allowed_with_floor() {
+    let env = Env::default();
+    let (client, admin, sme) = setup(&env);
+    let floor = 50_000i128;
+    let (tok, tre) = free_addresses(&env);
+    client.init(
+        &admin,
+        &String::from_str(&env, "W10_231_A"),
+        &sme,
+        &TARGET,
+        &800i64,
+        &0u64,
+        &tok,
+        &None,
+        &tre,
+        &None,
+        &Some(floor),
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None::<i64>,
+        &None::<u32>,
+    );
+    let investor = Address::generate(&env);
+    client.fund(&investor, &(floor * 2));
+    // Full unfund — residual == 0 — must succeed.
+    let result = client.unfund(&investor, &(floor * 2));
+    assert_eq!(result.funded_amount, 0);
+    assert_eq!(client.get_contribution(&investor), 0);
+}
+
+/// A partial unfund leaving residual >= floor must succeed.
+#[test]
+fn unfund_partial_above_floor_succeeds() {
+    let env = Env::default();
+    let (client, admin, sme) = setup(&env);
+    let floor = 50_000i128;
+    let (tok, tre) = free_addresses(&env);
+    client.init(
+        &admin,
+        &String::from_str(&env, "W10_231_B"),
+        &sme,
+        &TARGET,
+        &800i64,
+        &0u64,
+        &tok,
+        &None,
+        &tre,
+        &None,
+        &Some(floor),
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None::<i64>,
+        &None::<u32>,
+    );
+    let investor = Address::generate(&env);
+    let contribution = floor * 3;
+    client.fund(&investor, &contribution);
+    // Unfund leaving exactly floor remaining — must succeed.
+    let result = client.unfund(&investor, &(floor * 2));
+    assert_eq!(client.get_contribution(&investor), floor);
+    assert_eq!(result.funded_amount, floor);
+}
+
+/// A partial unfund leaving a non-zero residual below the floor must be rejected
+/// with ResidualContributionBelowFloor (code 268).
+#[test]
+fn unfund_partial_below_floor_rejected() {
+    let env = Env::default();
+    let (client, admin, sme) = setup(&env);
+    let floor = 50_000i128;
+    let (tok, tre) = free_addresses(&env);
+    client.init(
+        &admin,
+        &String::from_str(&env, "W10_231_C"),
+        &sme,
+        &TARGET,
+        &800i64,
+        &0u64,
+        &tok,
+        &None,
+        &tre,
+        &None,
+        &Some(floor),
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None::<i64>,
+        &None::<u32>,
+    );
+    let investor = Address::generate(&env);
+    // Fund 100, floor is 50. Unfunding 80 leaves residual of 20 (< 50) — must fail.
+    client.fund(&investor, &(floor * 2));
+    let result = client.try_unfund(&investor, &(floor + floor / 2 + 10));
+    assert_contract_error(result, EscrowError::ResidualContributionBelowFloor);
+}
+
+/// When no floor is configured, any partial unfund succeeds.
+#[test]
+fn unfund_partial_no_floor_succeeds() {
+    let env = Env::default();
+    let (client, admin, sme) = setup(&env);
+    let (tok, tre) = free_addresses(&env);
+    client.init(
+        &admin,
+        &String::from_str(&env, "W10_231_D"),
+        &sme,
+        &TARGET,
+        &800i64,
+        &0u64,
+        &tok,
+        &None,
+        &tre,
+        &None,
+        &None, // no floor
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None::<i64>,
+        &None::<u32>,
+    );
+    let investor = Address::generate(&env);
+    client.fund(&investor, &1_000i128);
+    // Leave a tiny residual — should be fine with no floor.
+    let result = client.unfund(&investor, &999i128);
+    assert_eq!(client.get_contribution(&investor), 1);
+    assert_eq!(result.funded_amount, 1);
     client.fund(&investor, &1_000i128);
 
     let entries = SorobanVec::from_array(
