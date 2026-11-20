@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "StarFund Contract Deployment Manifest Template",
+  "description": "Machine-readable deployment manifest template for StarFund contracts on Stellar/Soroban (Issue #362).",
+  "manifestVersion": "1.0.0",
+  "network": {
+    "networkPassphrase": "Test SDF Network ; September 2015",
+    "rpcUrl": "https://soroban-testnet.stellar.org",
+    "networkType": "testnet"
+  },
+  "deployment": {
+    "contractName": "starfund_escrow",
+    "contractId": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+    "wasmHash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "adminAddress": "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+    "deployerAddress": "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+    "salt": "0000000000000000000000000000000000000000000000000000000000000001",
+    "deployedAtTimestamp": 1700000000,
+    "sourceCommit": "HEAD"
+  },
+  "initializationArgs": {
+    "admin": "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+    "feeRecipient": "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+    "defaultFeeBps": 100
+  },
+  "verification": {
+    "builderImage": "stellar/soroban-cli:22.0.1",
+    "buildProfile": "release",
+    "reproducible": true
+  }
+}

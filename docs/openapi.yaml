@@ -6,7 +6,10 @@ info:
   description: |
     REST API for the StarFund global invoice liquidity network on Stellar.
     Exposes health, API info, invoice management, and escrow lifecycle endpoints.
-    All monetary amounts are in the smallest unit (stroops: 1 XLM = 10,000,000 stroops).
+    All monetary amounts and funding token values are expressed in base integer units (stroops):
+    - Native asset (XLM): 1 XLM = 10,000,000 stroops (7 decimal places).
+    - Soroban token contracts (SAC / SEP-41): Amounts follow 7 decimal places unless explicitly defined by token contract decimals.
+    - Contract amounts are signed 128-bit integers (`i128`), and must never be rounded to float64 precision.
   contact:
     name: StarFund
   license:

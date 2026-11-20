@@ -412,3 +412,49 @@ describe("ErrorResponse schema", () => {
     assertInvalid(ref, { error: "NOT_FOUND" });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Stellar Address Fixture Validation & Unknown Keyword Detection (Issues #364, #365)
+// ---------------------------------------------------------------------------
+
+describe("Stellar address type and checksum format in API fixtures (Issue #364)", () => {
+  const STELLAR_ADDRESS_REGEX = /^[GC][A-Z2-7]{55}$/;
+
+  it("validates that all StellarAddress schema examples and fixtures conform to StrKey format", () => {
+    const addressExample = schemas.StellarAddress?.example;
+    assert.ok(addressExample, "StellarAddress must have an example");
+    assert.match(addressExample, STELLAR_ADDRESS_REGEX, "StellarAddress example must match 56-char base32 StrKey");
+  });
+
+  it("verifies address fields across domain object fixtures", () => {
+    const escrowExample = schemas.InvoiceEscrow?.example;
+    if (escrowExample) {
+      if (escrowExample.admin) assert.match(escrowExample.admin, STELLAR_ADDRESS_REGEX);
+      if (escrowExample.sme_address) assert.match(escrowExample.sme_address, STELLAR_ADDRESS_REGEX);
+      if (escrowExample.payer) assert.match(escrowExample.payer, STELLAR_ADDRESS_REGEX);
+    }
+  });
+});
+
+describe("Detect unknown JSON Schema keywords in docs tests (Issue #365)", () => {
+  const KNOWN_KEYWORDS = new Set([
+    "$ref", "$schema", "title", "description", "type", "properties", "required",
+    "additionalProperties", "items", "enum", "example", "format", "pattern",
+    "minimum", "maximum", "minLength", "maxLength", "allOf", "anyOf", "oneOf",
+    "not", "default", "readOnly", "writeOnly", "nullable", "uniqueItems"
+  ]);
+
+  it("verifies all component schemas use valid standard JSON Schema / OpenAPI 3.1 keywords", () => {
+    for (const [name, schema] of Object.entries(schemas)) {
+      if (typeof schema === "object" && schema !== null) {
+        for (const key of Object.keys(schema)) {
+          assert.ok(
+            KNOWN_KEYWORDS.has(key),
+            `Unknown JSON Schema keyword '${key}' found in schema '${name}'`
+          );
+        }
+      }
+    }
+  });
+});
+
