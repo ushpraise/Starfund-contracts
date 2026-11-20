@@ -9,6 +9,7 @@ on:
 jobs:
   fmt-build-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -42,6 +43,13 @@ jobs:
       - name: Build WASM
         run: cargo build --target wasm32v1-none --release -p starfund_escrow
 
+      - name: Upload release WASM review artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: starfund-escrow-wasm
+          path: target/wasm32v1-none/release/starfund_escrow.wasm
+          if-no-files-found: error
+
       - name: Workspace Clippy (all targets)
         run: cargo clippy -p starfund_escrow --all-targets -- -D warnings
 
@@ -55,6 +63,7 @@ jobs:
 
   cargo-audit:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -71,16 +80,20 @@ jobs:
 
   openapi-docs:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        node-version: [18, 20, 22]
     defaults:
       run:
         working-directory: docs
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Node.js
+      - name: Install Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: ${{ matrix.node-version }}
           cache: npm
           cache-dependency-path: docs/package-lock.json
 
@@ -89,3 +102,4 @@ jobs:
 
       - name: Validate docs/openapi.yaml
         run: npm test
+
