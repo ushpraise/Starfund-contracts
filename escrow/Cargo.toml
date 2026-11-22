@@ -3,6 +3,7 @@ name = "starfund_escrow"
 version = "0.1.0"
 edition = "2021"
 description = "StarFund invoice escrow contract - holds funds until settlement"
+license = "MIT"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
