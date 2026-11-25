@@ -25,6 +25,8 @@ pub struct DefaultMockToken;
 enum DataKey {
     Balance(Address),
     Allowance(Address, Address),
+    /// When `true`, `transfer` out of this address is rejected (failure-injection switch).
+    FailOutgoing(Address),
 }
 
 #[contractimpl]
@@ -49,9 +51,25 @@ impl DefaultMockToken {
             .unwrap_or(0)
     }
 
+    /// Make every `transfer` out of `from` fail (`fail == true`) or behave normally again.
+    ///
+    /// Deterministic failure fixture for tests that need an outgoing token call to be rejected
+    /// and later restored. The default is `false`, so existing tests are unaffected.
+    pub fn set_fail_outgoing(env: Env, from: Address, fail: bool) {
+        env.storage().persistent().set(&DataKey::FailOutgoing(from), &fail);
+    }
+
     /// Transfer `amount` from `from` to `to`.
     pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {
         from.require_auth();
+        let rejected: bool = env
+            .storage()
+            .persistent()
+            .get(&DataKey::FailOutgoing(from.clone()))
+            .unwrap_or(false);
+        if rejected {
+            panic!("transfer rejected by the failure fixture");
+        }
         Self::spend_balance(&env, &from, amount);
         Self::receive_balance(&env, &to, amount);
     }

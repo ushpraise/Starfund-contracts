@@ -736,6 +736,9 @@ pub const MAX_PAUSE_TOGGLE_WINDOW_SECS: u64 = 7_776_000; // 90 days
 
 /// Stable typed errors emitted by StarFund escrow entrypoints.
 ///
+/// This is the only active contract error catalog and the source of the exported error codes; no
+/// other file in the crate defines an `EscrowError` that is part of the public interface.
+///
 /// Codes are append-only: never reuse or renumber a variant. Client SDKs should branch on the
 /// numeric code rather than legacy panic strings. See `docs/escrow-error-messages.md`.
 #[contracterror]

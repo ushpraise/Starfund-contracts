@@ -49,6 +49,8 @@ pub use test_utils::{
 // not part of the active dispute-lifecycle validation. Keep only the focused
 // dispute-release coverage enabled for the canonical repair path.
 mod dispute_release;
+mod allowlist_compaction_tests;
+mod claim_rollback_tests;
 
 // Storage XDR compatibility fixtures (issue #404).
 //
