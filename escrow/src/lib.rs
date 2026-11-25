@@ -2942,6 +2942,8 @@ pub struct CollateralRecordedEvt {
     pub name: Symbol,
     /// Invoice whose SME-reported metadata was updated.
     pub invoice_id: Symbol,
+    /// SME-reported off-chain asset symbol (identity required for historical reconstruction).
+    pub asset: Symbol,
     /// SME-reported amount in the off-chain asset's own units; not a locked token balance.
     pub amount: i128,
     /// Prior recorded amount, or 0 if no prior commitment existed.
@@ -2999,6 +3001,10 @@ pub struct InvestorPayoutClaimed {
     pub invoice_id: Symbol,
     /// Gross payout transferred to the investor in the funding token.
     pub payout: i128,
+    /// Investor's effective yield in basis points (from stored position).
+    pub effective_yield_bps: u32,
+    /// Original commitment duration in seconds (from stored position).
+    pub commitment_lock_secs: u64,
 }
 
 #[contractevent]
@@ -3354,6 +3360,8 @@ impl StarfundEscrow {
                 env.storage()
                     .instance()
                     .set(&FeeScheduleStorageKey::Active, &p);
+                // Clone previous before destructuring to retain it for the event (issue #433).
+                let previous_for_event = previous.clone();
                 if let Some(prev_schedule) = previous {
                     env.storage()
                         .instance()
@@ -3370,7 +3378,7 @@ impl StarfundEscrow {
                     name: symbol_short!("fee_act"),
                     invoice_id: Self::get_escrow(env.clone()).invoice_id,
                     schedule: p,
-                    previous,
+                    previous: previous_for_event,
                 }
                 .publish(&env);
                 return true;
@@ -6263,6 +6271,7 @@ impl StarfundEscrow {
         CollateralRecordedEvt {
             name: symbol_short!("coll_rec"),
             invoice_id: escrow.invoice_id.clone(),
+            asset,
             amount,
             prior_amount,
         }
@@ -6368,6 +6377,7 @@ impl StarfundEscrow {
             CollateralRecordedEvt {
                 name: symbol_short!("coll_rec"),
                 invoice_id: escrow.invoice_id.clone(),
+                asset: asset.clone(),
                 amount,
                 prior_amount,
             }
@@ -8884,6 +8894,12 @@ impl StarfundEscrow {
             payout,
         );
 
+        // Populate event metadata from stored investor position (issue #432).
+        let effective_yield_bps = Self::get_persistent_investor_effective_yield(&env, investor.clone())
+            .map(|y| y as u32)
+            .unwrap_or(escrow.yield_bps);
+        let commitment_lock_secs = Self::get_persistent_investor_committed_lock_secs(&env, investor.clone());
+
         let payout_investor = investor.clone();
         InvestorPayoutClaimed {
             name: symbol_short!("inv_claim"),
@@ -10315,16 +10331,22 @@ impl StarfundEscrow {
     /// skipped silently (batch mode). Otherwise a zero contribution fails with
     /// [`EscrowError::NoContributionToRefund`].
     fn refund_impl(env: &Env, investor: Address, skip_zero_contribution: bool) {
+        // Check contribution before requiring auth in batch mode (issue #435).
+        // This avoids requiring signature for entries that will be safely skipped.
+        if skip_zero_contribution {
+            let amount: i128 = Self::get_persistent_investor_contribution(env, investor.clone());
+            if amount <= 0 {
+                return;
+            }
+        }
+
         investor.require_auth();
 
         let escrow = Self::get_escrow(env.clone());
         guard_status_eq(env, escrow.status, 4, EscrowError::RefundNotCancelled);
 
         let amount: i128 = Self::get_persistent_investor_contribution(env, investor.clone());
-        if amount <= 0 {
-            if skip_zero_contribution {
-                return;
-            }
+        if amount <= 0 && !skip_zero_contribution {
             fail(env, EscrowError::NoContributionToRefund);
         }
 
