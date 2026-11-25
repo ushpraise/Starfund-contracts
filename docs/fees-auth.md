@@ -4,10 +4,14 @@ Documents **who** may configure or realize the protocol fee, **when**, and **wha
 rejection** — for auditors, integrators, and reviewers. Verified directly against
 `escrow/src/lib.rs` (line references below); this is not a design proposal.
 
-> **Scope:** "fees" in this contract means exactly one thing — the immutable
+> **Scope:** "fees" in this contract means one thing applied two ways — the
 > `protocol_fee_bps` split applied to the SME's principal at
-> [`StarfundEscrow::withdraw`]. There is currently **no entrypoint that changes
-> `protocol_fee_bps` after `init`** — see [No update path](#no-update-path-by-design) below.
+> [`StarfundEscrow::withdraw`]. The rate is set at `init` but is **not immutable**:
+> the admin can change it later, while the escrow is still `Open`, via
+> [`StarfundEscrow::set_protocol_fee_bps`] — see
+> [`set_protocol_fee_bps` — updates the rate](#set_protocol_fee_bps--updates-the-rate-admin-authorized-open-only)
+> below. `withdraw` always realizes whatever rate is stored *at withdrawal time*, not
+> necessarily the rate configured at `init`.
 
 ---
 
@@ -15,7 +19,7 @@ rejection** — for auditors, integrators, and reviewers. Verified directly agai
 
 | Role | Fee-related capability |
 |------|------------------------|
-| **Admin** | Sets `protocol_fee_bps` once, at `init`, as part of creating the escrow. No other fee-related power. |
+| **Admin** | Sets `protocol_fee_bps` at `init`, and may change it again at any time while the escrow is `Open` via `set_protocol_fee_bps` (nonce-protected, bounds-checked). No fee-related power once the escrow leaves `Open`. |
 | **SME** (`sme_address`) | Triggers fee *realization* by calling `withdraw`. Does not choose or see the fee rate change — it was fixed at `init`. |
 | **Treasury** | Passive recipient of the fee transfer inside `withdraw`. **Does not authorize anything on this path** — see [Treasury is not authorized here](#treasury-is-not-authorized-on-the-withdraw-path). |
 | **Investor** | No interaction with fees at all. Settlement (`settle`), claims (`claim_investor_payout`), and refunds (`refund`) never apply or reference `protocol_fee_bps`. |
@@ -40,6 +44,31 @@ rejection** — for auditors, integrators, and reviewers. Verified directly agai
   errors and auth failures are distinct failure classes.
 - **Effect:** `protocol_fee_bps` (or `0`) is written once to `DataKey::ProtocolFeeBps` and never
   read-modified again by any other entrypoint.
+
+### `set_protocol_fee_bps` — updates the rate (admin-authorized, `Open`-only)
+
+`escrow/src/lib.rs:4749` (`pub fn set_protocol_fee_bps`).
+
+- **Auth:** `admin.require_auth()`, via `load_escrow_require_admin` (`lib.rs:4474`). Only the
+  current escrow admin can call this; no other role can change the fee rate post-`init`.
+- **Lifecycle restriction:** only callable while `status == 0` (`Open`). Once the escrow has
+  advanced (funded, settled, withdrawn, cancelled), the rate is frozen for the life of that
+  instance. Rejected with the error named `ProtocolFeeUpdateNotOpen` at `lib.rs:4755` when
+  `status != 0` — see the note in [ADR cross-references](#cross-references); this identifier is
+  not currently a documented numeric `EscrowError` code elsewhere in this repo, so treat the
+  numeric value as unverified until confirmed against the compiled contract.
+- **Replay protection:** takes `expected_nonce: u32` and consumes it via `consume_admin_nonce`
+  (`lib.rs:4511`) — the call aborts with `AdminNonceMismatch` (**257**) if `expected_nonce` doesn't
+  match the stored admin nonce. This is the same nonce-consumption pattern used by the other
+  admin-gated setters in this contract (e.g. cap/floor raises and lowers); it prevents a captured
+  or replayed authorization from being used twice.
+- **Bounds:** `new_fee_bps` must satisfy `0..=10_000` (basis points) — the same envelope enforced
+  at `init`. Rejected with `ProtocolFeeBpsOutOfRange` (**215**) outside that range.
+- **No-op short-circuit:** if `new_fee_bps == old_fee_bps`, the call returns the unchanged value
+  without writing storage or emitting an event.
+- **Effect on success:** `protocol_fee_bps` is overwritten in `DataKey::ProtocolFeeBps`, and the
+  function returns the new value. Emits [`ProtocolFeeUpdated`](#event-protocolfeeupdated) with both
+  the old and new rate.
 
 ### `withdraw` — realizes the fee (SME-authorized)
 
@@ -74,7 +103,15 @@ rejection** — for auditors, integrators, and reviewers. Verified directly agai
   the **full gross** `funded_amount` (fee + net combined) so liability accounting stays correct
   regardless of the split; `fee` transfers to treasury (skipped entirely when `fee == 0` — no
   transfer call is made, preserving the pre-fee gas profile); `net` transfers to `sme_address`.
-  Emits [`SmeWithdrew`](#event-smewithdrew).
+  Emits [`SmeWithdrew`](#event-smewithdrew). The `fee_bps` used here is whatever is stored in
+  `DataKey::ProtocolFeeBps` **at the moment `withdraw` runs** — if `set_protocol_fee_bps` changed
+  it after `init`, this is the updated rate, not the `init`-time rate.
+
+  Do not confuse this applied rate with the entirely separate `FeeSchedule`
+  governance/off-chain-tracking mechanism (`submit_fee_schedule`, `get_active_fee_schedule`, etc.,
+  keyed by `FeeScheduleStorageKey`) documented in
+  [`escrow-read-api.md`](escrow-read-api.md#fee-governance-informational-only) — that schedule is
+  **informational only** and is never read by `withdraw` or `release`.
 
 ### `get_protocol_fee_bps` — reads the configured rate (unauthenticated)
 
@@ -87,17 +124,17 @@ rejection** — for auditors, integrators, and reviewers. Verified directly agai
 
 ---
 
-## No update path (by design)
+## Update path: `set_protocol_fee_bps`
 
-Unlike `MaxUniqueInvestorsCap`, `MaxPerInvestorCap`, and `MinContributionFloor` — each of which has
-a dedicated admin `raise_*`/`lower_*` entrypoint — **`protocol_fee_bps` has no setter of any kind**
-after `init`. There is no `set_protocol_fee_bps`, no `raise_protocol_fee_bps`, nothing. Once an
-escrow is created, its fee rate for the life of that instance is exactly what `init` recorded.
+Like `MaxUniqueInvestorsCap`, `MaxPerInvestorCap`, and `MinContributionFloor` — each of which has a
+dedicated admin `raise_*`/`lower_*` entrypoint — `protocol_fee_bps` also has a dedicated
+admin-gated setter: [`set_protocol_fee_bps`](#set_protocol_fee_bps--updates-the-rate-admin-authorized-open-only).
+It differs from those cap/floor setters in two ways: it is a single bidirectional setter (no
+separate `raise_`/`lower_` split) and it is restricted to the `Open` status rather than being
+callable across `Open`/`Funded`.
 
-If you are reading this alongside a PR or branch that adds such a setter: that is a **separate,
-additive change** to the authorization surface documented here, not a correction of it. This
-document reflects the fee model as implemented on `main` at the time of writing (commit
-`e2eaacd`).
+Once the escrow leaves `Open` (funded, settled, withdrawn, or cancelled), the rate is frozen for
+the rest of that instance's life — there is no setter reachable from any later status.
 
 ## Treasury is not authorized on the withdraw path
 
@@ -123,6 +160,19 @@ complete.
 | `fee` | `i128` | Protocol fee transferred to treasury (`0` when `protocol_fee_bps == 0`) |
 
 Indexers reconstructing gross principal must compute `amount + fee`, not read `amount` alone.
+
+## Event: `ProtocolFeeUpdated`
+
+`escrow/src/lib.rs:2712` (`pub struct ProtocolFeeUpdated`). Emitted exactly once per successful
+`set_protocol_fee_bps` call that actually changes the rate (the no-op `new_fee_bps == old_fee_bps`
+path returns early without publishing this event).
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `name` (topic) | `Symbol` | `"fee_upd"` |
+| `invoice_id` (topic) | `Symbol` | The escrow's invoice identifier |
+| `old_fee_bps` | `i64` | The rate in effect immediately before this call |
+| `new_fee_bps` | `i64` | The rate in effect immediately after this call |
 
 ---
 
@@ -153,5 +203,7 @@ created or destroyed by the split.
   follows; this document is the fee-specific instance of that pattern.
 - [ADR-007: Storage Key Evolution](adr/ADR-007-storage-key-evolution.md) — why
   `get_protocol_fee_bps` defaults to `0` for pre-existing escrow instances.
+- `consume_admin_nonce` (`lib.rs:4511`) — the shared nonce-consumption helper used by
+  `set_protocol_fee_bps` and every other nonce-protected admin setter in this contract.
 - [`docs/escrow-token-safety.md`](escrow-token-safety.md) — the balance-delta-checked transfer
   wrapper both the fee and net legs of `withdraw` use.

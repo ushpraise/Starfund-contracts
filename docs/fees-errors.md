@@ -19,8 +19,8 @@ SME's principal at [`StarfundEscrow::withdraw`]. The fee rate is configured once
 
 | Entrypoint | Auth role | Description |
 | --- | --- | --- |
-| `init(... protocol_fee_bps)` | Admin | Configures `protocol_fee_bps` (basis points, `0..=10_000`). Stored immutably under `DataKey::ProtocolFeeBps`. |
-| `set_protocol_fee_bps(new_bps)` | Admin | Updates `DataKey::ProtocolFeeBps`. Emits `ProtocolFeeUpdated`. |
+| `init(... protocol_fee_bps)` | Admin | Configures `protocol_fee_bps` (basis points, `0..=10_000`). Stored under `DataKey::ProtocolFeeBps`. |
+| `set_protocol_fee_bps(new_fee_bps, expected_nonce)` | Admin | Updates `DataKey::ProtocolFeeBps`. Only callable while `status == 0` (Open); nonce-protected against replay. No-ops (no write, no event) if the rate is unchanged. Emits `ProtocolFeeUpdated` on an actual change. |
 | `get_protocol_fee_bps()` | None (read-only) | Returns the stored `protocol_fee_bps`, or `0` for pre-fee escrows. |
 | `withdraw()` | SME | Splits `funded_amount` into a treasury fee and SME net payout. Fee = `funded_amount * fee_bps / 10_000` (floor, checked). Status transitions to 3. |
 
@@ -33,6 +33,8 @@ SME's principal at [`StarfundEscrow::withdraw`]. The fee rate is configured once
 | Code | Variant | Category |
 | ---: | --- | --- |
 | 215 | `ProtocolFeeBpsOutOfRange` | Fee configuration |
+| 257 | `AdminNonceMismatch` | Fee configuration (replay protection, shared with other admin setters) |
+| — | `ProtocolFeeUpdateNotOpen` (lifecycle guard; numeric code unverified — see [Guard ordering](#set_protocol_fee_bpsnew_fee_bps-expected_nonce)) | Fee configuration |
 | 216 | `WithdrawFeeArithmeticOverflow` | Fee arithmetic |
 | 217 | `WithdrawNetArithmeticUnderflow` | Fee arithmetic |
 | 165 | `InsufficientContractBalance` | Fee execution |
@@ -68,6 +70,26 @@ SME's principal at [`StarfundEscrow::withdraw`]. The fee rate is configured once
 | **Entrypoints** | `init`, `set_protocol_fee_bps` |
 | **Trigger** | The `protocol_fee_bps` parameter is outside `0..=10_000`. A negative value or a value greater than `10_000` (100%) is rejected. |
 | **Avoidance** | Supply a value in `0..=10_000`. A value of `0` means no fee (full `funded_amount` goes to the SME). A value of `10_000` means 100% fee (entire `funded_amount` goes to the treasury). |
+
+### `ProtocolFeeUpdateNotOpen`
+
+| Field | Value |
+| --- | --- |
+| **Variant** | the error named `ProtocolFeeUpdateNotOpen` at `lib.rs:4755` |
+| **Code** | Not currently present as a numeric variant elsewhere in the `EscrowError` enum (`lib.rs:744`) at the time of writing; treat the code as unverified until confirmed against the compiled contract artifact rather than against source alone |
+| **Entrypoints** | `set_protocol_fee_bps` |
+| **Trigger** | `escrow.status != 0` — the escrow has already left the `Open` state (funded, settled, withdrawn, or cancelled). |
+| **Avoidance** | Only call `set_protocol_fee_bps` while the escrow is `Open`. Check `get_escrow_summary().status_classification` (or `escrow.status == 0`) first. |
+
+### 257 — `AdminNonceMismatch`
+
+| Field | Value |
+| --- | --- |
+| **Variant** | `EscrowError::AdminNonceMismatch` |
+| **Code** | 257 |
+| **Entrypoints** | `set_protocol_fee_bps` and the other nonce-protected admin setters (see `consume_admin_nonce`, `lib.rs:4511`) |
+| **Trigger** | `expected_nonce` does not match the escrow's currently stored admin nonce — stale, duplicate, or future nonce. The specific mismatch reason is not disclosed. |
+| **Avoidance** | Read the current nonce before constructing the call (e.g. via whatever admin-nonce getter the integration layer uses) and pass it as `expected_nonce`; do not reuse a nonce across calls. |
 
 ---
 
@@ -163,12 +185,15 @@ multiple conditions are true simultaneously.
 3. `ProtocolFeeBpsOutOfRange` (215) — `protocol_fee_bps` outside `0..=10_000`
 4. Storage writes and event emission
 
-### `set_protocol_fee_bps(new_bps)`
+### `set_protocol_fee_bps(new_fee_bps, expected_nonce)`
 
 1. `EscrowNotInitialized` (20) — escrow not initialized
-2. Admin authorization — `admin.require_auth()` (Soroban host auth failure, not a typed error)
-3. `ProtocolFeeBpsOutOfRange` (215) — `new_bps` outside `0..=10_000`
-4. Storage write and `ProtocolFeeUpdated` event emission
+2. Admin authorization — `admin.require_auth()`, via `load_escrow_require_admin` (Soroban host auth failure, not a typed error)
+3. The error named `ProtocolFeeUpdateNotOpen` (`lib.rs:4755`) — `status != 0` (escrow not `Open`). This identifier does not currently appear elsewhere in the `EscrowError` enum defined at `lib.rs:744`; treat its numeric code as unverified pending confirmation against the compiled contract.
+4. `AdminNonceMismatch` (257) — `expected_nonce` does not match the stored admin nonce (via `consume_admin_nonce`); the nonce is consumed (incremented) only once this check passes
+5. `ProtocolFeeBpsOutOfRange` (215) — `new_fee_bps` outside `0..=10_000`
+6. No-op short-circuit: if `new_fee_bps == old_fee_bps`, returns immediately — no storage write, no event
+7. Storage write and `ProtocolFeeUpdated` event emission
 
 ### `withdraw()`
 

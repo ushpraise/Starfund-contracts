@@ -1108,8 +1108,8 @@ Note that `collateral_limit` is independent of `is_set`: it reflects the stored 
 
 | Entrypoint | Fee source | Behavior |
 |---|---|---|
-| `withdraw()` | `DataKey::ProtocolFeeBps` (immutable, set at `init`) | Splits `funded_amount` according to init-time fee; **ignores all fee schedules** |
-| `release()` | `DataKey::ProtocolFeeBps` (immutable, set at `init`) | Splits each tranche according to init-time fee; **ignores all fee schedules** |
+| `withdraw()` | `DataKey::ProtocolFeeBps` (set at `init`, admin-updatable while `Open` via `set_protocol_fee_bps`) | Splits `funded_amount` according to the rate stored *at withdrawal time*; **ignores all fee schedules** |
+| `release()` | `DataKey::ProtocolFeeBps` (set at `init`, admin-updatable while `Open` via `set_protocol_fee_bps`) | Splits each tranche according to the rate stored *at release time*; **ignores all fee schedules** |
 | `claim_investor_payout()` | Per-investor yield only (no additional protocol fee) | No protocol fee deduction; uses base or tiered yield set at first deposit |
 
 ### Fee Schedule Storage (Governance Records)
@@ -1162,7 +1162,7 @@ Returns the pending fee schedule that will activate at a future ledger, or `None
 
 **Activation condition:** This schedule becomes active (and moves to `Active` storage) once `activation_ledger <= env.ledger().sequence()`. The transition is automatic; no explicit activation call is required.
 
-**⚠️ Important:** Even when `Some(...)`, this pending schedule has **zero effect on current disbursements** because actual fees remain locked to the init-time `DataKey::ProtocolFeeBps`. This view is for governance transparency only.
+**⚠️ Important:** Even when `Some(...)`, this pending schedule has **zero effect on current disbursements** because actual fees come only from `DataKey::ProtocolFeeBps` (set at `init`, admin-updatable while `Open`). This view is for governance transparency only.
 
 ### `get_previous_fee_schedule() → Option<FeeSchedule>`
 
@@ -1186,7 +1186,7 @@ Returns the previously active fee schedule after a boundary activation, or `None
 Integrators **must not** assume that `get_active_fee_schedule()` returns the fees being applied to investor payouts. Instead:
 
 1. **For auditing:** Query `get_active_fee_schedule`, `get_pending_fee_schedule`, `get_previous_fee_schedule` to track governance decisions and off-chain accounting records.
-2. **For payout calculations:** Use `get_escrow_summary() → protocol_fee_bps`, which reflects the immutable `DataKey::ProtocolFeeBps` set at `init` and used by all disbursals.
-3. **For per-investor payouts:** Use `compute_investor_payout(investor)`, which applies the investor's locked-in yield and the init-time protocol fee, **not** any dynamic schedule.
+2. **For payout calculations:** Use `get_escrow_summary() → protocol_fee_bps` (equivalently `get_protocol_fee_bps()`), which reflects the current `DataKey::ProtocolFeeBps` — the value set at `init` and, while the escrow is `Open`, replaceable by the admin via `set_protocol_fee_bps` — used by all disbursals.
+3. **For per-investor payouts:** Use `compute_investor_payout(investor)`, which applies the investor's locked-in yield and the current `DataKey::ProtocolFeeBps`, **not** any dynamic schedule.
 
-The separation prevents accidental payout miscalculations if an integration layer assumes dynamic fee governance when the on-chain system uses immutable init-time fees.
+The separation prevents accidental payout miscalculations if an integration layer assumes dynamic fee governance when the on-chain system uses the single `DataKey::ProtocolFeeBps` value (init-set, optionally admin-updated pre-funding) instead.

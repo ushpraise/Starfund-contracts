@@ -7,10 +7,28 @@ This document provides a reference for indexers and block explorers to consume e
 All events follow the Soroban `contractevent` format. Key fields like `invoice_id` and `investor` are marked as **topics** to enable efficient filtering by indexers.
 
 ### Common Topics
-- **Topic 0**: Contract ID (provided by Soroban host).
-- **Topic 1**: Event Name (Symbol, e.g., `funded`, `escrow_sd`).
-- **Topic 2**: `invoice_id` (Symbol) — present in most events.
-- **Topic 3**: `investor` (Address) — present in funding and claim events.
+
+The RPC event envelope carries the emitting contract's address as **metadata separate from the
+topic array** (field `contractId`, not a topic index) — filter on it directly, the way
+[`escrow-indexer.md`](escrow-indexer.md#rpc-event-filter-baseline) does (`contractId` = escrow
+contract id). The `topics` array itself is numbered from the event symbol at index **0**:
+
+- **`topic[0]`**: Event Name (Symbol, e.g., `funded`, `escrow_sd`) — always present, always first.
+- **`topic[1]`**: `invoice_id` (Symbol) — present on most events (see exceptions below).
+- **`topic[2]`**: `investor`/`origin` (Address) — present only on funding, claim, allowlist-change,
+  and callback events.
+
+Below, each event's **"Topics:"** list is a 1-based ordinal list for readability — list item *N*
+corresponds to `topic[N-1]` in the 0-indexed RPC array. So item 1 (the event name) is always
+`topic[0]`, item 2 (when present) is `topic[1]`, and so on.
+
+**Exceptions — no `invoice_id` topic:** [`EscrowInitialized`](#escrowinitialized) and
+[`InvestorAllowlistBatchApplied`](#investorallowlistbatchapplied) have only one topic (the event
+name). Neither carries `invoice_id` as a topic — `EscrowInitialized` carries it nested inside the
+`escrow` field of its data payload, and `InvestorAllowlistBatchApplied` carries it as a top-level
+`invoice_id` field in its data payload. An indexer that filters strictly by `topic[1] ==
+invoice_id` will miss both; it must instead read `invoice_id` out of the data payload for these
+two event types.
 
 ---
 
@@ -498,10 +516,21 @@ the transition at step 2, because nothing was written on-chain.
 ## 🛠️ Indexing Recommendations
 
 ### Filtering by Invoice
-To track all activity for a specific invoice, indexers should filter for events where **Topic 2** matches the `invoice_id`.
+To track all activity for a specific invoice, indexers should filter for events where
+`topic[1]` matches the `invoice_id`. This covers every event **except**
+[`EscrowInitialized`](#escrowinitialized) and
+[`InvestorAllowlistBatchApplied`](#investorallowlistbatchapplied) — those two have no
+`invoice_id` topic at all; for them, read `invoice_id` out of the event's data payload instead
+(nested in the `escrow` field for `EscrowInitialized`, top-level for
+`InvestorAllowlistBatchApplied`). See [Common Topics](#common-topics) above.
 
 ### Filtering by Investor
-To track an investor's portfolio, filter for events where **Topic 3** matches the investor's `Address`. This applies to `EscrowFunded` and `InvestorPayoutClaimed`.
+To track an investor's portfolio, filter for events where `topic[2]` matches the investor's
+`Address`. This applies to `EscrowFunded`, `InvestorPayoutClaimed`, and
+`InvestorAllowlistChanged`; the same `topic[2]` position also carries `origin` (an `Address`,
+not an investor) on the callback events (`CallbackRegisteredEvent`,
+`CallbackExecutedEvent`, `CallbackCancelledEvent`) — check the event name (`topic[0]`) before
+assuming `topic[2]` is an investor address.
 
 ### Decoding payloads
 Payloads are XDR-encoded. Use the `starfund_escrow` WASM/interface or the `Stellar SDK` to decode the `data` field into the corresponding Rust structs.

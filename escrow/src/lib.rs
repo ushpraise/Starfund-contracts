@@ -3388,8 +3388,9 @@ impl StarfundEscrow {
     /// returned here is for governance and off-chain accounting purposes only.
     ///
     /// **Actual fees applied:**
-    /// - `withdraw()` uses the immutable `DataKey::ProtocolFeeBps` set at `init` time.
-    /// - `release()` applies the same immutable protocol fee from `DataKey::ProtocolFeeBps`.
+    /// - `withdraw()` uses the current `DataKey::ProtocolFeeBps`, as set at `init` and
+    ///   optionally updated afterward (while the escrow is `Open`) via `set_protocol_fee_bps`.
+    /// - `release()` applies the same `DataKey::ProtocolFeeBps` value.
     /// - Neither endpoint reads or respects `FeeScheduleStorageKey::Active`.
     ///
     /// External auditors must not assume fees are governed by this dynamic schedule.
@@ -5428,28 +5429,42 @@ impl StarfundEscrow {
         result
     }
 
-    /// Pure read ΓÇö no auth, no storage writes, safe for simulation.
+    /// Read-only ΓÇö no auth, no storage writes. **Not unconditionally safe for simulation**:
+    /// it can abort (see `# Errors` below) depending on `lock` and the escrow's `maturity`.
     ///
-    /// Returns a [`YieldTierPreview`] with `{effective_yield_bps, matched_lock_secs}` for a
-    /// hypothetical contribution of `amount` with `lock` seconds, using the **exact same
+    /// Returns a [`YieldResolution`] with `{effective_yield_bps, matched_lock_secs}` for a
+    /// hypothetical contribution with `lock` seconds, using the **exact same
     /// tier-selection rule** applied at the first [`StarfundEscrow::fund_with_commitment`]
     /// deposit.
     ///
     /// # Parameters
     ///
-    /// - `amount: i128` ΓÇö Hypothetical funding amount (currently unused; accepted for signature
-    ///   parity with `fund_with_commitment()` for future extensibility).
+    /// - `amount: i128` ΓÇö Hypothetical funding amount. **Currently entirely unused**: not
+    ///   validated, not read, and does not affect the returned yield. Accepted only for
+    ///   signature parity with `fund_with_commitment()` for future extensibility.
     ///   - Valid range: any `i128` value (no validation applied; parameter unused)
     ///
     /// - `lock: u64` ΓÇö Hypothetical lock commitment in seconds.
-    ///   - Valid range: `0..=u64::MAX` (all u64 values safe; used in comparison only)
-    ///   - `0` = no lock ΓåÆ returns base yield
-    ///   - `> 0` = seconds; matched against tier `min_lock_secs` for highest-yield tier selection
-    ///   - **Derivation**: Pure comparison logic `lock >= tier.min_lock_secs` is overflow-free
+    ///   - Valid range: `0..=u64::MAX`, but see `# Errors` ΓÇö not every value in range succeeds
+    ///   - `0` = no lock ΓåÆ returns base yield immediately, skips the checks below entirely
+    ///   - `> 0` = seconds; first validated via [`StarfundEscrow::commitment_claim_not_before`]
+    ///     (see `# Errors`), then matched against tier `min_lock_secs` for highest-yield tier
+    ///     selection
+    ///
+    /// # Errors
+    ///
+    /// For `lock > 0`, this call delegates to the same `commitment_claim_not_before` guard used
+    /// by `fund_with_commitment`, which can abort the call:
+    /// - [`EscrowError::InvestorClaimTimeOverflow`] if `env.ledger().timestamp() + lock` overflows
+    ///   `u64`.
+    /// - [`EscrowError::CommitmentLockExceedsMaturity`] if the escrow has a positive `maturity`
+    ///   and the resulting claim time (`timestamp + lock`) would exceed it.
+    ///
+    /// It also panics with `"Escrow not initialized"` if called before [`StarfundEscrow::init`].
     ///
     /// # Returns
     ///
-    /// Tuple `(effective_yield_bps, matched_lock_secs)`:
+    /// [`YieldResolution`] `{ effective_yield_bps, matched_lock_secs }`:
     /// - `effective_yield_bps`: The selected tier's yield, or base yield if no tier matches
     /// - `matched_lock_secs`: The matched tier's `min_lock_secs`, or `0` if no tier matched
     ///
