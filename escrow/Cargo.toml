@@ -24,8 +24,8 @@ testutils = ["soroban-sdk/testutils"]
 fixtures = ["testutils"]
 
 [dependencies]
-soroban-sdk = "29.0"
+soroban-sdk = "30.0"
 
 [dev-dependencies]
-soroban-sdk = { version = "29.0", features = ["testutils"] }
+soroban-sdk = { version = "30.0", features = ["testutils"] }
 proptest = "1.6.0"
